@@ -48,6 +48,7 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = new Set(['.xlsx', '.xlsb']);
 const PORT = process.env.PORT || 3001;
 const JOB_TTL_MS = 60 * 60 * 1000;
+const MAX_FILES_PER_JOB = 100;
 
 const HELP_DESK_SYSTEM_PROMPT = `You are the Help Desk assistant for the Actuarial Services Reserves Console.
 
@@ -106,6 +107,7 @@ const upload = multer({
 });
 
 const processingJobs = new Map();
+const stagedUploads = new Map();
 
 function isNumericLike(value) {
   if (typeof value === 'number') return Number.isFinite(value);
@@ -300,6 +302,36 @@ async function cleanupJob(jobId) {
   if (job.cleanupTimer) clearTimeout(job.cleanupTimer);
   await safeRemoveDir(job.workingDir);
   processingJobs.delete(jobId);
+}
+
+function scheduleStagedUploadCleanup(stagedUpload) {
+  if (stagedUpload.cleanupTimer) clearTimeout(stagedUpload.cleanupTimer);
+  stagedUpload.cleanupTimer = setTimeout(() => {
+    cleanupStagedUpload(stagedUpload.id).catch(error => {
+      console.error(`Failed to clean up staged upload ${stagedUpload.id}:`, error);
+    });
+  }, JOB_TTL_MS);
+
+  if (typeof stagedUpload.cleanupTimer.unref === 'function') {
+    stagedUpload.cleanupTimer.unref();
+  }
+}
+
+async function cleanupStagedUpload(uploadId) {
+  const stagedUpload = stagedUploads.get(uploadId);
+  if (!stagedUpload) return;
+  if (stagedUpload.cleanupTimer) clearTimeout(stagedUpload.cleanupTimer);
+  stagedUploads.delete(uploadId);
+  await Promise.all(stagedUpload.files.map(file => safeUnlink(file.path)));
+}
+
+function requireOwnedStagedUpload(req, res, next) {
+  const stagedUpload = stagedUploads.get(req.params.uploadId);
+  if (!stagedUpload || stagedUpload.ownerUserId !== req.auth.userId) {
+    return res.status(404).json({ error: 'Upload session not found or expired.' });
+  }
+  req.stagedUpload = stagedUpload;
+  return next();
 }
 
 async function buildZipFile(zipPath, sourceSheets, separateRi) {
@@ -685,6 +717,131 @@ app.patch('/api/admin/access-users/:userId', authSystem.requireAdmin, async (req
     return next(error);
   }
 });
+
+app.post('/api/process/uploads', authSystem.requireApprovedUser, (req, res) => {
+  const expectedFileCount = Number(req.body?.expectedFileCount);
+  if (!Number.isInteger(expectedFileCount) || expectedFileCount < 1 || expectedFileCount > MAX_FILES_PER_JOB) {
+    return res.status(400).json({
+      error: `Select between 1 and ${MAX_FILES_PER_JOB} workbooks for one processing job.`
+    });
+  }
+
+  const stagedUpload = {
+    id: randomUUID(),
+    ownerUserId: req.auth.userId,
+    expectedFileCount,
+    files: [],
+    separateRi: req.body?.separateRi === true,
+    modelInput: req.body?.modelInput || null,
+    reserveData: req.body?.reserveData || null,
+    grossMatches: req.body?.grossMatches || null,
+    riMatches: req.body?.riMatches || null,
+    cleanupTimer: null,
+    createdAt: new Date().toISOString()
+  };
+
+  stagedUploads.set(stagedUpload.id, stagedUpload);
+  scheduleStagedUploadCleanup(stagedUpload);
+  return res.status(201).json({
+    uploadId: stagedUpload.id,
+    expectedFileCount: stagedUpload.expectedFileCount,
+    uploadedFileCount: 0
+  });
+});
+
+app.post(
+  '/api/process/uploads/:uploadId/files',
+  authSystem.requireApprovedUser,
+  requireOwnedStagedUpload,
+  upload.any(),
+  async (req, res, next) => {
+    const files = req.files || [];
+
+    try {
+      if (files.length !== 1) {
+        await Promise.all(files.map(file => safeUnlink(file.path)));
+        return res.status(400).json({ error: 'Upload one workbook at a time.' });
+      }
+
+      const [file] = files;
+      if (!['lobFiles', 'reinsuranceFiles'].includes(file.fieldname)) {
+        await safeUnlink(file.path);
+        return res.status(400).json({ error: 'The workbook upload category is invalid.' });
+      }
+
+      if (req.stagedUpload.files.length >= req.stagedUpload.expectedFileCount) {
+        await safeUnlink(file.path);
+        return res.status(409).json({ error: 'All expected workbooks have already been uploaded.' });
+      }
+
+      req.stagedUpload.files.push(file);
+      scheduleStagedUploadCleanup(req.stagedUpload);
+      return res.status(201).json({
+        uploadedFileCount: req.stagedUpload.files.length,
+        expectedFileCount: req.stagedUpload.expectedFileCount,
+        fileName: file.originalname
+      });
+    } catch (error) {
+      await Promise.all(files.map(file => safeUnlink(file.path)));
+      return next(error);
+    }
+  }
+);
+
+app.post(
+  '/api/process/uploads/:uploadId/start',
+  authSystem.requireApprovedUser,
+  requireOwnedStagedUpload,
+  (req, res) => {
+    const stagedUpload = req.stagedUpload;
+    if (stagedUpload.files.length !== stagedUpload.expectedFileCount) {
+      return res.status(409).json({
+        error: `Uploaded ${stagedUpload.files.length} of ${stagedUpload.expectedFileCount} expected workbooks.`
+      });
+    }
+
+    if (stagedUpload.cleanupTimer) clearTimeout(stagedUpload.cleanupTimer);
+    stagedUploads.delete(stagedUpload.id);
+
+    const job = createJob(stagedUpload.files.length, req.auth.userId);
+    job.separateRi = stagedUpload.separateRi;
+    job.modelInput = stagedUpload.modelInput;
+    job.reserveData = stagedUpload.reserveData;
+    job.grossMatches = stagedUpload.grossMatches;
+    job.riMatches = stagedUpload.riMatches;
+
+    if (job.modelInput) {
+      setImmediate(() => {
+        processTransferJob(job, stagedUpload.files);
+      });
+    } else {
+      setImmediate(() => {
+        processJob(job, stagedUpload.files);
+      });
+    }
+
+    return res.status(202).json({
+      jobId: job.id,
+      status: job.status,
+      currentStatus: job.currentStatus,
+      progressPercent: job.progressPercent
+    });
+  }
+);
+
+app.delete(
+  '/api/process/uploads/:uploadId',
+  authSystem.requireApprovedUser,
+  requireOwnedStagedUpload,
+  async (req, res, next) => {
+    try {
+      await cleanupStagedUpload(req.params.uploadId);
+      return res.status(204).end();
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
 
 app.post('/api/process', authSystem.requireApprovedUser, upload.any(), (req, res) => {
   const files = req.files || [];
