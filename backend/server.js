@@ -812,6 +812,14 @@ app.use((error, _req, res, _next) => {
   return res.status(statusCode).json({ error: message });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Backend server is running on port ${PORT}`);
+});
+
+server.on('error', error => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Stop the existing backend before starting another one.`);
+    process.exit(1);
+  }
+  throw error;
 });

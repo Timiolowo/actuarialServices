@@ -1,11 +1,11 @@
 import { createAuthClient } from 'better-auth/react';
-import { emailOTPClient, jwtClient } from 'better-auth/client/plugins';
+import { adminClient, emailOTPClient, jwtClient } from 'better-auth/client/plugins';
 
 const authBaseUrl = (import.meta.env.VITE_NEON_AUTH_URL || '').replace(/\/$/, '');
 
 export const authClient = createAuthClient({
   baseURL: authBaseUrl,
-  plugins: [emailOTPClient(), jwtClient()],
+  plugins: [emailOTPClient(), jwtClient(), adminClient()],
   fetchOptions: {
     onSuccess(context) {
       const jwt = context.response.headers.get('set-auth-jwt');

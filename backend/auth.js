@@ -15,6 +15,30 @@ const EXPECTED_AUDIENCE = process.env.NEON_AUTH_AUDIENCE || AUTH_BASE_URL;
 const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
 
 let remoteJwks;
+const loggedAuthFailures = new Set();
+
+function buildAuthClaimValues(...configuredValues) {
+  const values = new Set();
+  const add = value => {
+    if (typeof value !== 'string' || !value.trim()) return;
+    const normalized = value.trim().replace(/\/$/, '');
+    values.add(normalized);
+    values.add(`${normalized}/`);
+  };
+
+  configuredValues.forEach(add);
+  try {
+    const authUrl = new URL(AUTH_BASE_URL);
+    add(authUrl.origin);
+    add(`${authUrl.origin}${authUrl.pathname.replace(/\/auth\/?$/, '')}`);
+  } catch {
+    // Configuration validation below reports malformed URLs.
+  }
+  return [...values];
+}
+
+const EXPECTED_ISSUERS = buildAuthClaimValues(EXPECTED_ISSUER, AUTH_BASE_URL);
+const EXPECTED_AUDIENCES = buildAuthClaimValues(EXPECTED_AUDIENCE, AUTH_BASE_URL);
 
 class DatabaseUnavailableError extends Error {
   constructor() {
@@ -44,6 +68,10 @@ function identityFromUser(user) {
       ? user.sub
       : '';
   const name = typeof user?.name === 'string' ? user.name.trim() : '';
+  const roles = typeof user?.role === 'string'
+    ? user.role.split(',').map(role => role.trim().toLowerCase())
+    : [];
+  const neonRole = roles.includes('admin') ? 'admin' : 'member';
 
   if (!userId || !email || !emailVerified || !hasExactCompanyDomain(email)) {
     const error = new Error(AUTH_ERROR_MESSAGE);
@@ -51,7 +79,7 @@ function identityFromUser(user) {
     throw error;
   }
 
-  return { userId, email, name };
+  return { userId, email, name, neonRole };
 }
 
 async function verifySessionToken(token) {
@@ -80,8 +108,8 @@ async function verifyToken(token) {
   if (!remoteJwks) remoteJwks = createRemoteJWKSet(new URL(JWKS_URL));
 
   const { payload } = await jwtVerify(token, remoteJwks, {
-    issuer: EXPECTED_ISSUER,
-    audience: EXPECTED_AUDIENCE,
+    issuer: EXPECTED_ISSUERS,
+    audience: EXPECTED_AUDIENCES,
     clockTolerance: 5
   });
 
@@ -100,11 +128,17 @@ async function authenticateRequest(req, res) {
     return await verifyToken(match[1]);
   } catch (error) {
     const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 401;
-    console.error('Authentication token rejected.', {
-      code: typeof error.code === 'string' ? error.code : 'AUTH_TOKEN_REJECTED',
-      claim: typeof error.claim === 'string' ? error.claim : undefined,
-      reason: statusCode === 403 ? 'company_identity_rejected' : 'session_validation_failed'
-    });
+    const code = typeof error.code === 'string' ? error.code : 'AUTH_TOKEN_REJECTED';
+    const claim = typeof error.claim === 'string' ? error.claim : undefined;
+    const failureKey = `${statusCode}:${code}:${claim || ''}`;
+    if (!loggedAuthFailures.has(failureKey)) {
+      loggedAuthFailures.add(failureKey);
+      console.error('Authentication token rejected.', {
+        code,
+        claim,
+        reason: statusCode === 403 ? 'company_identity_rejected' : 'session_validation_failed'
+      });
+    }
     res.status(statusCode).json({ error: statusCode === 403 ? AUTH_ERROR_MESSAGE : 'Please log in.' });
     return null;
   }
@@ -145,14 +179,16 @@ async function getAccessRecord(identity) {
   }
 
   const database = requireDatabase();
+  const assignedRole = identity.neonRole === 'admin' ? 'admin' : 'member';
   await database`
     INSERT INTO app_users (auth_user_id, email, first_name, last_name, status, role, requested_at, reviewed_at, updated_at)
-    VALUES (${identity.userId}, ${identity.email}, ${firstName}, ${surname}, 'approved', 'member', NOW(), NOW(), NOW())
+    VALUES (${identity.userId}, ${identity.email}, ${firstName}, ${surname}, 'approved', ${assignedRole}, NOW(), NOW(), NOW())
     ON CONFLICT (email) DO UPDATE SET
       auth_user_id = EXCLUDED.auth_user_id,
       first_name = EXCLUDED.first_name,
       last_name = EXCLUDED.last_name,
       status = 'approved',
+      role = CASE WHEN EXCLUDED.role = 'admin' THEN 'admin' ELSE app_users.role END,
       updated_at = NOW()
   `;
 
@@ -184,6 +220,13 @@ async function requireAdmin(req, res, next) {
   try {
     const identity = await authenticateRequest(req, res);
     if (!identity) return;
+    if (INITIAL_OWNER_EMAILS.has(identity.email) || identity.neonRole === 'admin') {
+      req.auth = {
+        ...identity,
+        role: INITIAL_OWNER_EMAILS.has(identity.email) ? 'owner' : 'admin'
+      };
+      return next();
+    }
     const access = await getAccessRecord(identity);
     if (!access || access.status !== 'approved' || !['owner', 'admin'].includes(access.role)) {
       return res.status(403).json({ error: AUTH_ERROR_MESSAGE });
@@ -212,7 +255,11 @@ async function getCurrentAccess(identity) {
     firstName: access?.first_name || nameParts[0] || 'Team',
     lastName: access?.last_name || nameParts.slice(1).join(' ') || 'Member',
     status: 'approved',
-    role: access?.role || 'member'
+    role: INITIAL_OWNER_EMAILS.has(identity.email)
+      ? 'owner'
+      : identity.neonRole === 'admin'
+        ? 'admin'
+        : access?.role || 'member'
   };
 }
 
