@@ -12,7 +12,6 @@ const multer = require('multer');
 const os = require('os');
 const path = require('path');
 const readline = require('readline');
-const XLSX = require('xlsx');
 const JSZip = require('jszip');
 const authSystem = require('./auth');
 
@@ -122,11 +121,11 @@ function csvCell(value) {
 
 function createSheetState(baseDir, sheetName) {
   const rawPath = path.join(baseDir, `${sheetName}.jsonl`);
+  fs.closeSync(fs.openSync(rawPath, 'a'));
   return {
     sheetName,
     rawPath,
     csvPath: null,
-    rawStream: fs.createWriteStream(rawPath, { encoding: 'utf8' }),
     sourceFileCount: 0
   };
 }
@@ -379,6 +378,48 @@ async function buildZipFile(zipPath, sourceSheets, separateRi) {
   });
 }
 
+function extractWorkbookInWorker(file, workingDir, separateRi) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const worker = new Worker(path.join(__dirname, 'consolidationWorker.js'), {
+      workerData: {
+        filePath: file.path,
+        fieldName: file.fieldname,
+        workingDir,
+        separateRi,
+        sheetNames: GROUP1_SHEETS
+      },
+      execArgv: [],
+      resourceLimits: {
+        maxOldGenerationSizeMb: 384,
+        stackSizeMb: 8
+      }
+    });
+
+    worker.once('message', message => {
+      settled = true;
+      if (message.success) {
+        resolve(message.contributedSheets || []);
+      } else {
+        reject(new Error(message.error || 'Could not read workbook'));
+      }
+    });
+    worker.once('error', error => {
+      settled = true;
+      reject(new Error(error.code === 'ERR_WORKER_OUT_OF_MEMORY'
+        ? 'Workbook exceeded the available processing memory.'
+        : error.message));
+    });
+    worker.once('exit', code => {
+      if (!settled) {
+        reject(new Error(code === 0
+          ? 'Workbook reader stopped before returning a result.'
+          : `Workbook reader stopped with exit code ${code}.`));
+      }
+    });
+  });
+}
+
 async function processJob(job, files) {
   const uploadedPaths = files.map(file => file.path).filter(Boolean);
 
@@ -413,56 +454,14 @@ async function processJob(job, files) {
         updateJob(job, `Reading workbook ${fileIndex + 1}/${files.length}: ${file.originalname}`, Math.min(30, Math.round(((fileIndex + 1) / files.length) * 30)));
         appendJobLog(job, `Reading workbook ${fileIndex + 1}/${files.length}: ${file.originalname}`);
 
-        const workbook = XLSX.readFile(file.path, {
-          cellHTML: false,
-          cellFormula: false,
-          cellNF: false,
-          cellStyles: false,
-          cellText: false
-        });
+        const contributedSheets = await extractWorkbookInWorker(file, workingDir, job.separateRi);
 
         processedFileCount += 1;
         job.processedFileCount = processedFileCount;
 
-        for (const sheetName of GROUP1_SHEETS) {
-          if (!workbook.SheetNames.includes(sheetName)) continue;
-
-          const allRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
-          if (allRows.length <= 8) continue;
-
-          let prefix = '';
-          if (job.separateRi) {
-             prefix = file.fieldname === 'reinsuranceFiles' ? 'RI' : 'Gross';
-          }
-          const stateKey = prefix ? `${prefix}_${sheetName}` : sheetName;
+        for (const stateKey of contributedSheets) {
           const state = sourceSheets.get(stateKey);
-          
-          const headers = allRows[8].map(value => String(value).trim());
-          let workbookContributedRows = false;
-
-          for (const row of allRows.slice(9)) {
-            const record = {};
-            let hasData = false;
-
-            for (let column = 0; column < headers.length; column += 1) {
-              const header = headers[column];
-              if (!header) continue;
-              const value = row[column] === undefined ? '' : row[column];
-              record[header] = value;
-              if (value !== '') hasData = true;
-            }
-
-            if (!hasData) continue;
-
-            if (sheetName === 'ACTUARIAL_AOM_IMPACT') {
-              delete record['* MACRO_STEP_ID_DESCRIPTION'];
-            }
-
-            await writeLine(state.rawStream, `${JSON.stringify(record)}\n`);
-            workbookContributedRows = true;
-          }
-
-          if (workbookContributedRows) state.sourceFileCount += 1;
+          if (state) state.sourceFileCount += 1;
         }
       } catch (error) {
         skippedFiles.push({ name: file.originalname, reason: error.message || 'Could not read workbook' });
@@ -475,8 +474,6 @@ async function processJob(job, files) {
     if (processedFileCount === 0) {
       throw new Error('None of the uploaded files could be read as Excel workbooks.');
     }
-
-    await Promise.all(Array.from(sourceSheets.values(), state => closeStream(state.rawStream)));
 
     const sheets = {};
     let totalRows = 0;
