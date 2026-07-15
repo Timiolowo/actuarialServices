@@ -1495,6 +1495,10 @@ tr:hover td {
   min-width: 0;
 }
 
+.history-entry-main > div:last-child {
+  min-width: 0;
+}
+
 .history-workflow-icon {
   display: inline-flex;
   align-items: center;
