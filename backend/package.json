@@ -1,0 +1,27 @@
+{
+  "name": "actuarial-reserves-backend",
+  "version": "1.0.0",
+  "description": "Backend service for Actuarial Reserves spreadsheet consolidation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --max-old-space-size=4096 server.js",
+    "dev": "nodemon --max-old-space-size=4096 server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "ai": "^6.0.227",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.3.0",
+    "jose": "^6.2.3",
+    "jszip": "^3.10.1",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
