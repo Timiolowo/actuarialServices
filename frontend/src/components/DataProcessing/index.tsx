@@ -865,8 +865,8 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
 
                               allEntities.forEach(item => {
                                 displayRows.push({ ...item, isChild: false });
-                                if (item.isParent && expandedLobs.has(item.lob)) {
-                                  item.children.forEach((child: any) => {
+                                if ((item as any).isParent && expandedLobs.has(item.lob)) {
+                                  (item as any).children.forEach((child: any) => {
                                     displayRows.push({ ...child, isChild: true });
                                   });
                                 }
@@ -1124,8 +1124,8 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
                 
                 allEntities.forEach(item => {
                   displayRows.push({ ...item, isChild: false });
-                  if (item.isParent && expandedLobs.has(item.lob)) {
-                    item.children.forEach((child: any) => {
+                  if ((item as any).isParent && expandedLobs.has(item.lob)) {
+                    (item as any).children.forEach((child: any) => {
                       displayRows.push({ ...child, isChild: true });
                     });
                   }
@@ -1306,17 +1306,17 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
                 allEntities.forEach(item => {
                   displayRows.push({ ...item, isChild: false, isTreaty: false });
                   
-                  if (!item.isParent && expandedLobs.has(item.lob)) {
-                    Object.entries(item.treaties || {}).forEach(([tName, tVals]) => {
+                  if (!(item as any).isParent && expandedLobs.has(item.lob)) {
+                    Object.entries((item as any).treaties || {}).forEach(([tName, tVals]: [string, any]) => {
                       displayRows.push({ ...tVals, lob: `↳ ${tName}`, isChild: true, isTreaty: true });
                     });
                   }
 
-                  if (item.isParent && expandedLobs.has(item.lob)) {
-                    item.children.forEach((child: any) => {
+                  if ((item as any).isParent && expandedLobs.has(item.lob)) {
+                    (item as any).children.forEach((child: any) => {
                       displayRows.push({ ...child, isChild: true, isTreaty: false });
                       if (expandedLobs.has(child.lob)) {
-                        Object.entries(child.treaties || {}).forEach(([tName, tVals]) => {
+                        Object.entries(child.treaties || {}).forEach(([tName, tVals]: [string, any]) => {
                           displayRows.push({ ...tVals, lob: `↳ ${tName}`, isChild: true, isTreaty: true, isDeepChild: true });
                         });
                       }
