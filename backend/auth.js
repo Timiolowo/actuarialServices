@@ -35,24 +35,15 @@ function hasExactCompanyDomain(email) {
   return separatorIndex > 0 && normalized.slice(separatorIndex + 1) === COMPANY_DOMAIN;
 }
 
-async function verifyToken(token) {
-  if (!AUTH_BASE_URL || !JWKS_URL || !EXPECTED_ISSUER || !EXPECTED_AUDIENCE) {
-    throw new Error('Neon Auth is not configured.');
-  }
-
-  const { createRemoteJWKSet, jwtVerify } = await import('jose');
-  if (!remoteJwks) remoteJwks = createRemoteJWKSet(new URL(JWKS_URL));
-
-  const { payload } = await jwtVerify(token, remoteJwks, {
-    issuer: EXPECTED_ISSUER,
-    audience: EXPECTED_AUDIENCE,
-    clockTolerance: 5
-  });
-
-  const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
-  const emailVerified = payload.emailVerified === true || payload.email_verified === true;
-  const userId = typeof payload.sub === 'string' ? payload.sub : '';
-  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+function identityFromUser(user) {
+  const email = typeof user?.email === 'string' ? user.email.trim().toLowerCase() : '';
+  const emailVerified = user?.emailVerified === true || user?.email_verified === true;
+  const userId = typeof user?.id === 'string'
+    ? user.id
+    : typeof user?.sub === 'string'
+      ? user.sub
+      : '';
+  const name = typeof user?.name === 'string' ? user.name.trim() : '';
 
   if (!userId || !email || !emailVerified || !hasExactCompanyDomain(email)) {
     const error = new Error(AUTH_ERROR_MESSAGE);
@@ -63,10 +54,44 @@ async function verifyToken(token) {
   return { userId, email, name };
 }
 
+async function verifySessionToken(token) {
+  const response = await fetch(`${AUTH_BASE_URL}/get-session`, {
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    signal: AbortSignal.timeout(8000)
+  });
+
+  if (!response.ok) throw new Error('Neon Auth rejected the session.');
+  const session = await response.json();
+  if (!session?.user) throw new Error('Neon Auth session not found.');
+  return identityFromUser(session.user);
+}
+
+async function verifyToken(token) {
+  if (!AUTH_BASE_URL || !JWKS_URL || !EXPECTED_ISSUER || !EXPECTED_AUDIENCE) {
+    throw new Error('Neon Auth is not configured.');
+  }
+
+  if (token.split('.').length !== 3) return verifySessionToken(token);
+
+  const { createRemoteJWKSet, jwtVerify } = await import('jose');
+  if (!remoteJwks) remoteJwks = createRemoteJWKSet(new URL(JWKS_URL));
+
+  const { payload } = await jwtVerify(token, remoteJwks, {
+    issuer: EXPECTED_ISSUER,
+    audience: EXPECTED_AUDIENCE,
+    clockTolerance: 5
+  });
+
+  return identityFromUser(payload);
+}
+
 async function authenticateRequest(req, res) {
   const header = req.get('authorization') || '';
-  const match = header.match(/^Bearer ([A-Za-z0-9._~-]+)$/);
-  if (!match) {
+  const match = header.match(/^Bearer\s+(\S+)$/i);
+  if (!match || match[1].length > 4096) {
     res.status(401).json({ error: 'Please log in.' });
     return null;
   }
@@ -75,6 +100,11 @@ async function authenticateRequest(req, res) {
     return await verifyToken(match[1]);
   } catch (error) {
     const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 401;
+    console.error('Authentication token rejected.', {
+      code: typeof error.code === 'string' ? error.code : 'AUTH_TOKEN_REJECTED',
+      claim: typeof error.claim === 'string' ? error.claim : undefined,
+      reason: statusCode === 403 ? 'company_identity_rejected' : 'session_validation_failed'
+    });
     res.status(statusCode).json({ error: statusCode === 403 ? AUTH_ERROR_MESSAGE : 'Please log in.' });
     return null;
   }
@@ -122,7 +152,7 @@ async function getAccessRecord(identity) {
       auth_user_id = EXCLUDED.auth_user_id,
       first_name = EXCLUDED.first_name,
       last_name = EXCLUDED.last_name,
-      status = CASE WHEN app_users.status = 'revoked' THEN 'revoked' ELSE 'approved' END,
+      status = 'approved',
       updated_at = NOW()
   `;
 
@@ -147,18 +177,7 @@ async function requireCompanyIdentity(req, res, next) {
 }
 
 async function requireApprovedUser(req, res, next) {
-  try {
-    const identity = await authenticateRequest(req, res);
-    if (!identity) return;
-    const access = await getAccessRecord(identity);
-    if (!access || access.status !== 'approved') {
-      return res.status(403).json({ error: AUTH_ERROR_MESSAGE });
-    }
-    req.auth = { ...identity, role: access.role };
-    return next();
-  } catch (error) {
-    return next(error);
-  }
+  return requireCompanyIdentity(req, res, next);
 }
 
 async function requireAdmin(req, res, next) {
@@ -177,15 +196,23 @@ async function requireAdmin(req, res, next) {
 }
 
 async function getCurrentAccess(identity) {
-  const access = await getAccessRecord(identity);
-  if (!access) return { ...identity, status: 'none', role: 'member' };
+  let access = null;
+  if (INITIAL_OWNER_EMAILS.has(identity.email) || sql) {
+    try {
+      access = await getAccessRecord(identity);
+    } catch (error) {
+      console.error('Could not synchronise the signed-in user record.');
+    }
+  }
+
+  const nameParts = identity.name.split(/\s+/).filter(Boolean);
   return {
     userId: identity.userId,
     email: identity.email,
-    firstName: access.first_name,
-    lastName: access.last_name,
-    status: access.status,
-    role: access.role
+    firstName: access?.first_name || nameParts[0] || 'Team',
+    lastName: access?.last_name || nameParts.slice(1).join(' ') || 'Member',
+    status: 'approved',
+    role: access?.role || 'member'
   };
 }
 
