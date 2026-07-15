@@ -17,6 +17,7 @@ const JSZip = require('jszip');
 const authSystem = require('./auth');
 
 const app = express();
+app.set('trust proxy', 1);
 const allowedOrigins = new Set(
   (process.env.APP_ORIGINS || 'http://localhost:5173')
     .split(',')

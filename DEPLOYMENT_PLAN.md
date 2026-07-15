@@ -40,7 +40,7 @@ Success check: owner receives a verification code, logs in, and `/api/auth/me` r
 - Health check: `/api/health`.
 - Required environment variables:
   - `NODE_ENV=production`
-  - `DATABASE_URL` (secret)
+  - `DATABASE_URL` (secret; paste the raw URL without surrounding quotes)
   - `NEON_AUTH_BASE_URL`
   - `NEON_AUTH_JWKS_URL`
   - `NEON_AUTH_ISSUER`

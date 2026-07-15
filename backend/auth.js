@@ -12,7 +12,17 @@ const AUTH_BASE_URL = (process.env.NEON_AUTH_BASE_URL || '').replace(/\/$/, '');
 const JWKS_URL = process.env.NEON_AUTH_JWKS_URL || `${AUTH_BASE_URL}/.well-known/jwks.json`;
 const EXPECTED_ISSUER = process.env.NEON_AUTH_ISSUER || AUTH_BASE_URL;
 const EXPECTED_AUDIENCE = process.env.NEON_AUTH_AUDIENCE || AUTH_BASE_URL;
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
+
+function normalizeDatabaseUrl(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  const hasMatchingQuotes = (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    || (trimmed.startsWith('"') && trimmed.endsWith('"'));
+  return hasMatchingQuotes ? trimmed.slice(1, -1).trim() : trimmed;
+}
+
+const databaseUrl = normalizeDatabaseUrl(process.env.DATABASE_URL);
+const sql = databaseUrl ? neon(databaseUrl) : null;
 
 let remoteJwks;
 const loggedAuthFailures = new Set();
