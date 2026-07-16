@@ -10,9 +10,6 @@ import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { HowToUse } from './components/HowToUse';
 import { History } from './components/History';
-import { AdminPortal } from './components/AdminPortal';
-import { LoginPage } from './components/LoginPage';
-import { ProtectedRoute } from './components/ProtectedRoute';
 import { useActuarialProcessor } from './hooks/useActuarialProcessor';
 import './App.css';
 
@@ -124,20 +121,18 @@ function App() {
         <main style={{ flex: 1, overflowY: 'auto' }}>
           <Routes>
             <Route path="/" element={<LandingPage onSelectPortfolio={handleSelectPortfolio} />} />
-            <Route path="/login" element={<LoginPage />} />
             <Route path="/how-to-use" element={<HowToUse />} />
-            <Route path="/admin" element={<ProtectedRoute requireAdmin><AdminPortal /></ProtectedRoute>} />
             <Route
               path="/help-desk"
               element={(
                 <Suspense fallback={<div className="container">Loading Help Desk…</div>}>
-                  <ProtectedRoute><HelpDesk /></ProtectedRoute>
+                  <HelpDesk />
                 </Suspense>
               )}
             />
             <Route
               path="/:portfolioId/combine"
-              element={activePortfolioId ? <ProtectedRoute>{(
+              element={activePortfolioId ? (
                 <CombineSheet
                   portfolioTitle={currentPortfolioTitle || ''}
                   step={step}
@@ -156,30 +151,30 @@ function App() {
                   handleProcessFiles={() => handleProcessFiles(currentPortfolioTitle || '', activePortfolioId)}
                   handleClear={handleClear}
                 />
-              )}</ProtectedRoute> : <Navigate to="/" replace />}
+              ) : <Navigate to="/" replace />}
             />
             <Route
               path="/:portfolioId/data-processing"
               element={activePortfolioId
-                ? <ProtectedRoute><DataProcessing portfolioId={activePortfolioId} /></ProtectedRoute>
+                ? <DataProcessing portfolioId={activePortfolioId} />
                 : <Navigate to="/" replace />}
             />
             <Route
               path="/:portfolioId/history"
               element={activePortfolioId
-                ? <ProtectedRoute><History portfolioId={activePortfolioId} /></ProtectedRoute>
+                ? <History portfolioId={activePortfolioId} />
                 : <Navigate to="/" replace />}
             />
             <Route
               path="/:portfolioId/analysis"
               element={activePortfolioId
-                ? <ProtectedRoute><Analysis processedData={processedData} /></ProtectedRoute>
+                ? <Analysis processedData={processedData} />
                 : <Navigate to="/" replace />}
             />
             <Route
               path="/:portfolioId/settings"
               element={activePortfolioId
-                ? <ProtectedRoute><Settings onBack={() => handleSelectTab('combine')} /></ProtectedRoute>
+                ? <Settings onBack={() => handleSelectTab('combine')} />
                 : <Navigate to="/" replace />}
             />
             <Route path="*" element={<Navigate to="/" replace />} />

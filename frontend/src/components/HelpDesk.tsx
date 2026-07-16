@@ -3,7 +3,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { Streamdown } from 'streamdown';
 import 'streamdown/styles.css';
-import { getAccessToken } from '../lib/authClient';
+
 
 const troubleshootingItems = [
   {
@@ -37,8 +37,7 @@ export const HelpDesk: React.FC = () => {
   const [input, setInput] = useState('');
   const transport = useMemo(
     () => new DefaultChatTransport({
-      api: `${apiBaseUrl}/api/help-chat`,
-      headers: async () => ({ Authorization: `Bearer ${await getAccessToken()}` })
+      api: `${apiBaseUrl}/api/help-chat`
     }),
     []
   );

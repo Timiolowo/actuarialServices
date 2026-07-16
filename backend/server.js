@@ -13,7 +13,6 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const JSZip = require('jszip');
-const authSystem = require('./auth');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -326,7 +325,7 @@ async function cleanupStagedUpload(uploadId) {
 
 function requireOwnedStagedUpload(req, res, next) {
   const stagedUpload = stagedUploads.get(req.params.uploadId);
-  if (!stagedUpload || stagedUpload.ownerUserId !== req.auth.userId) {
+  if (!stagedUpload) {
     return res.status(404).json({ error: 'Upload session not found or expired.' });
   }
   req.stagedUpload = stagedUpload;
@@ -677,45 +676,8 @@ async function processTransferJob(job, files) {
   }
 }
 
-app.get('/api/auth/me', authSystem.requireCompanyIdentity, async (req, res, next) => {
-  try {
-    return res.json(await authSystem.getCurrentAccess(req.auth));
-  } catch (error) {
-    return next(error);
-  }
-});
 
-app.get('/api/admin/access-users', authSystem.requireAdmin, async (_req, res, next) => {
-  try {
-    return res.json(await authSystem.listAccessUsers());
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.get('/api/admin/access-audit', authSystem.requireAdmin, async (_req, res, next) => {
-  try {
-    return res.json(await authSystem.listAccessAudit());
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.patch('/api/admin/access-users/:userId', authSystem.requireAdmin, async (req, res, next) => {
-  try {
-    const access = await authSystem.updateAccessUser(
-      req.auth,
-      req.params.userId,
-      req.body?.status,
-      req.body?.role
-    );
-    return res.json(access);
-  } catch (error) {
-    return next(error);
-  }
-});
-
-app.post('/api/process/uploads', authSystem.requireApprovedUser, (req, res) => {
+app.post('/api/process/uploads', (req, res) => {
   const expectedFileCount = Number(req.body?.expectedFileCount);
   if (!Number.isInteger(expectedFileCount) || expectedFileCount < 1 || expectedFileCount > MAX_FILES_PER_JOB) {
     return res.status(400).json({
@@ -725,7 +687,7 @@ app.post('/api/process/uploads', authSystem.requireApprovedUser, (req, res) => {
 
   const stagedUpload = {
     id: randomUUID(),
-    ownerUserId: req.auth.userId,
+    ownerUserId: 'anonymous',
     expectedFileCount,
     files: [],
     separateRi: req.body?.separateRi === true,
@@ -748,7 +710,6 @@ app.post('/api/process/uploads', authSystem.requireApprovedUser, (req, res) => {
 
 app.post(
   '/api/process/uploads/:uploadId/files',
-  authSystem.requireApprovedUser,
   requireOwnedStagedUpload,
   upload.any(),
   async (req, res, next) => {
@@ -787,7 +748,6 @@ app.post(
 
 app.post(
   '/api/process/uploads/:uploadId/start',
-  authSystem.requireApprovedUser,
   requireOwnedStagedUpload,
   (req, res) => {
     const stagedUpload = req.stagedUpload;
@@ -800,7 +760,7 @@ app.post(
     if (stagedUpload.cleanupTimer) clearTimeout(stagedUpload.cleanupTimer);
     stagedUploads.delete(stagedUpload.id);
 
-    const job = createJob(stagedUpload.files.length, req.auth.userId);
+    const job = createJob(stagedUpload.files.length, 'anonymous');
     job.separateRi = stagedUpload.separateRi;
     job.modelInput = stagedUpload.modelInput;
     job.reserveData = stagedUpload.reserveData;
@@ -828,7 +788,6 @@ app.post(
 
 app.delete(
   '/api/process/uploads/:uploadId',
-  authSystem.requireApprovedUser,
   requireOwnedStagedUpload,
   async (req, res, next) => {
     try {
@@ -840,14 +799,14 @@ app.delete(
   }
 );
 
-app.post('/api/process', authSystem.requireApprovedUser, upload.any(), (req, res) => {
+app.post('/api/process', upload.any(), (req, res) => {
   const files = req.files || [];
 
   if (files.length === 0) {
     return res.status(400).json({ error: 'Please upload at least one XLSX or XLSB file.' });
   }
 
-  const job = createJob(files.length, req.auth.userId);
+  const job = createJob(files.length, 'anonymous');
   job.separateRi = req.body.separateRi === 'true';
 
   if (req.body.modelInput) {
@@ -873,9 +832,9 @@ app.post('/api/process', authSystem.requireApprovedUser, upload.any(), (req, res
   });
 });
 
-app.get('/api/process/:jobId/status', authSystem.requireApprovedUser, (req, res) => {
+app.get('/api/process/:jobId/status', (req, res) => {
   const job = processingJobs.get(req.params.jobId);
-  if (!job || (job.ownerUserId !== req.auth.userId && !['owner', 'admin'].includes(req.auth.role))) {
+  if (!job) {
     return res.status(404).json({ error: 'Processing job not found or expired.' });
   }
 
@@ -892,9 +851,9 @@ app.get('/api/process/:jobId/status', authSystem.requireApprovedUser, (req, res)
   });
 });
 
-app.get('/api/process/:jobId/download', authSystem.requireApprovedUser, (req, res) => {
+app.get('/api/process/:jobId/download', (req, res) => {
   const job = processingJobs.get(req.params.jobId);
-  if (!job || (job.ownerUserId !== req.auth.userId && !['owner', 'admin'].includes(req.auth.role))) {
+  if (!job) {
     return res.status(404).json({ error: 'Processing job not found or expired.' });
   }
 
@@ -921,7 +880,7 @@ app.get('/api/process/:jobId/download', authSystem.requireApprovedUser, (req, re
   zipStream.pipe(res);
 });
 
-app.post('/api/help-chat', authSystem.requireApprovedUser, async (req, res, next) => {
+app.post('/api/help-chat', async (req, res, next) => {
   try {
     if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
       return res.status(503).json({

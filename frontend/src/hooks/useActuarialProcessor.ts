@@ -36,6 +36,57 @@ interface ProcessingJobStatus {
   error: string | null;
 }
 
+interface LocalProgressMessage {
+  type: 'progress';
+  status: string;
+  progressPercent: number;
+  log?: string;
+  logType?: 'info' | 'success' | 'error';
+}
+
+interface LocalCompleteMessage {
+  type: 'complete';
+  zipBlob: Blob;
+  summary: ProcessingSummary;
+}
+
+interface LocalErrorMessage {
+  type: 'error';
+  message: string;
+}
+
+type LocalWorkerMessage = LocalProgressMessage | LocalCompleteMessage | LocalErrorMessage;
+
+function processCombineLocally(
+  files: { file: File; fieldName: 'lobFiles' | 'reinsuranceFiles' }[],
+  separateRi: boolean,
+  onProgress: (message: LocalProgressMessage) => void
+) {
+  return new Promise<{ zipBlob: Blob; summary: ProcessingSummary }>((resolve, reject) => {
+    const worker = new Worker(new URL('../workers/combine.worker.ts', import.meta.url), { type: 'module' });
+
+    worker.onmessage = (event: MessageEvent<LocalWorkerMessage>) => {
+      const message = event.data;
+      if (message.type === 'progress') {
+        onProgress(message);
+        return;
+      }
+      worker.terminate();
+      if (message.type === 'complete') {
+        resolve({ zipBlob: message.zipBlob, summary: message.summary });
+      } else {
+        reject(new Error(message.message));
+      }
+    };
+    worker.onerror = event => {
+      worker.terminate();
+      reject(new Error(event.message || 'The local workbook processor stopped unexpectedly.'));
+    };
+
+    worker.postMessage({ type: 'start', files, separateRi });
+  });
+}
+
 function decodeSummary(encodedSummary: string | null): ProcessingSummary | null {
   if (!encodedSummary) return null;
 
@@ -186,10 +237,56 @@ export function useActuarialProcessor() {
       setProcessingDuration((Date.now() - startTime) / 1000);
     }, 100);
     let stagedUploadId: string | null = null;
+    const processingFiles = [
+      ...activeLobFiles.map(file => ({ file, fieldName: 'lobFiles' as const })),
+      ...activeRiFiles.map(file => ({ file, fieldName: 'reinsuranceFiles' as const }))
+    ];
+
+    const completeProcessing = (zipBlob: Blob, summary: ProcessingSummary | null) => {
+      if (zipBlob.size === 0) throw new Error('Processing produced an empty ZIP file.');
+      const url = URL.createObjectURL(zipBlob);
+      setDownloadUrl(url);
+      setProcessedData(summary);
+      setProgressPercent(100);
+      setCurrentStatus('Consolidation completed successfully.');
+      addLog('━━━━━━━━━━━━ ✓ PROCESS COMPLETED SUCCESSFULLY ━━━━━━━━━━━━', 'success');
+      addOperationHistory({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        portfolioId,
+        portfolioTitle,
+        workflow,
+        status: 'completed',
+        createdAt: new Date().toISOString(),
+        durationSeconds: (Date.now() - startTime) / 1000,
+        fileCount: allFiles.length,
+        message: 'Processing completed successfully.',
+        summary: summary ? {
+          processedFileCount: summary.processedFileCount,
+          populatedSheetCount: summary.populatedSheetCount,
+          sheetCount: summary.sheetCount,
+          totalRows: summary.totalRows
+        } : null
+      });
+    };
 
     try {
-      setCurrentStatus('Uploading and consolidating workbooks...');
       addLog(`Preparing ${allFiles.length} workbook(s) for ${portfolioTitle}.`);
+
+      if (workflow === 'combine') {
+        const totalSize = processingFiles.reduce((total, item) => total + item.file.size, 0);
+        setProgressPercent(3);
+        setCurrentStatus('Preparing local workbook processing...');
+        addLog(`Processing ${formatFileSize(totalSize)} locally. Workbooks will not be uploaded.`, 'success');
+        const result = await processCombineLocally(processingFiles, separateRi, message => {
+          setCurrentStatus(message.status);
+          setProgressPercent(message.progressPercent);
+          if (message.log) addLog(message.log, message.logType || 'info');
+        });
+        completeProcessing(result.zipBlob, result.summary);
+        return;
+      }
+
+      setCurrentStatus('Uploading and processing workbooks...');
       addLog('Checking processing backend availability...');
 
       await assertProcessingBackendAvailable();
@@ -208,19 +305,15 @@ export function useActuarialProcessor() {
       });
       stagedUploadId = uploadId;
 
-      const uploadFiles = [
-        ...activeLobFiles.map(file => ({ file, fieldName: 'lobFiles' as const })),
-        ...activeRiFiles.map(file => ({ file, fieldName: 'reinsuranceFiles' as const }))
-      ];
-      const totalUploadSize = uploadFiles.reduce((total, item) => total + item.file.size, 0);
-      addLog(`Uploading ${uploadFiles.length} workbook(s) individually (${formatFileSize(totalUploadSize)} total).`);
+      const totalUploadSize = processingFiles.reduce((total, item) => total + item.file.size, 0);
+      addLog(`Uploading ${processingFiles.length} workbook(s) individually (${formatFileSize(totalUploadSize)} total).`);
 
-      for (const [fileIndex, item] of uploadFiles.entries()) {
+      for (const [fileIndex, item] of processingFiles.entries()) {
         const fileNumber = fileIndex + 1;
-        setCurrentStatus(`Uploading workbook ${fileNumber}/${uploadFiles.length}: ${item.file.name}`);
+        setCurrentStatus(`Uploading workbook ${fileNumber}/${processingFiles.length}: ${item.file.name}`);
         await uploadProcessingFile(uploadId, item.file, item.fieldName);
-        setProgressPercent(8 + Math.round((fileNumber / uploadFiles.length) * 17));
-        addLog(`Uploaded ${fileNumber}/${uploadFiles.length}: ${item.file.name} (${formatFileSize(item.file.size)}).`);
+        setProgressPercent(8 + Math.round((fileNumber / processingFiles.length) * 17));
+        addLog(`Uploaded ${fileNumber}/${processingFiles.length}: ${item.file.name} (${formatFileSize(item.file.size)}).`);
       }
 
       setCurrentStatus('Starting backend processing...');
@@ -257,38 +350,13 @@ export function useActuarialProcessor() {
       if (!response.ok) throw new Error(await responseError(response));
 
       const zipBlob = await response.blob();
-      if (zipBlob.size === 0) throw new Error('The processing server returned an empty ZIP file.');
-
       const summary = status?.summary || decodeSummary(response.headers.get('X-Processing-Summary'));
-      const url = URL.createObjectURL(zipBlob);
-      setDownloadUrl(url);
-      setProcessedData(summary);
-
-      setProgressPercent(100);
-      setCurrentStatus('Consolidation completed successfully.');
-      addLog('━━━━━━━━━━━━ ✓ PROCESS COMPLETED SUCCESSFULLY ━━━━━━━━━━━━', 'success');
-      addOperationHistory({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        portfolioId,
-        portfolioTitle,
-        workflow,
-        status: 'completed',
-        createdAt: new Date().toISOString(),
-        durationSeconds: (Date.now() - startTime) / 1000,
-        fileCount: allFiles.length,
-        message: 'Processing completed successfully.',
-        summary: summary ? {
-          processedFileCount: summary.processedFileCount,
-          populatedSheetCount: summary.populatedSheetCount,
-          sheetCount: summary.sheetCount,
-          totalRows: summary.totalRows
-        } : null
-      });
+      completeProcessing(zipBlob, summary);
     } catch (error) {
       if (stagedUploadId) {
         await cancelProcessingUpload(stagedUploadId).catch(() => undefined);
       }
-      const message = error instanceof TypeError
+      const message = error instanceof TypeError && workflow !== 'combine'
         ? backendUnavailableMessage()
         : error instanceof Error
           ? error.message

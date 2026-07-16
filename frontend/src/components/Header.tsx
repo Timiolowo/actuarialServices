@@ -1,6 +1,4 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 
 interface HeaderProps {
   activePortfolioId: string | null;
@@ -19,8 +17,6 @@ export const Header: React.FC<HeaderProps> = ({
   toggleTheme,
   handleExitPortfolio
 }) => {
-  const navigate = useNavigate();
-  const { session, access, logout } = useAuth();
   const pageTitle = activeTab === 'preview'
     ? 'Data Processing'
     : activeTab === 'history'
@@ -100,14 +96,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        {session ? (
-          <div className="header-account">
-            <span>{access?.email || session.user.email}</span>
-            <button className="btn-secondary" type="button" onClick={() => void logout()}>Log out</button>
-          </div>
-        ) : (
-          <button className="btn-primary" type="button" onClick={() => navigate('/login')}>Log in</button>
-        )}
+
       </div>
     </header>
   );
