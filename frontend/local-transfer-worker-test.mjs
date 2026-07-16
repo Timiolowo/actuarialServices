@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { File } from 'node:buffer';
 import { pathToFileURL } from 'node:url';
+import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 
 class MemoryFileHandle {
@@ -98,41 +99,85 @@ globalThis.self = {
   }
 };
 
-const rows = [['metadata']];
-while (rows.length < 8) rows.push([]);
-rows.push(['Policy', 'Amount']);
-rows.push(['A-1', 125]);
-rows.push(['A-2', 250]);
-const workbook = XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'ACTUALS_FOR_VISUALIZATION');
-const workbookBytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
-const inputFile = new File([workbookBytes], 'local-test.xlsx');
+const vbaPayload = Uint8Array.from([11, 22, 33, 44, 55]);
+const formats = [
+  { extension: 'xlsx', bookType: 'xlsx' },
+  { extension: 'xlsm', bookType: 'xlsm', vba: vbaPayload },
+  { extension: 'xlsb', bookType: 'xlsb' }
+];
+const files = [];
+const grossMatches = [];
 
-const configuredWorkerAsset = process.env.WORKER_ASSET;
-const workerAsset = configuredWorkerAsset || fs.readdirSync('dist/assets')
-  .find(name => name.startsWith('combine.worker-') && name.endsWith('.js'));
-assert.ok(workerAsset, 'compiled worker asset is missing');
-const workerPath = configuredWorkerAsset
-  ? path.resolve(configuredWorkerAsset)
-  : path.resolve('dist/assets', workerAsset);
-await import(pathToFileURL(workerPath).href);
+for (const [index, format] of formats.entries()) {
+  const lobName = `LOB-${index + 1}`;
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['original']]), 'Modellinput');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['original']]), 'Close_Incremental');
+  if (format.vba) workbook.vbaraw = format.vba;
+  const bytes = XLSX.write(workbook, {
+    type: 'array',
+    bookType: format.bookType,
+    bookVBA: true
+  });
+  const fileName = `engine-${index + 1}.${format.extension}`;
+  files.push({ file: new File([bytes], fileName), fieldName: 'lobFiles' });
+  grossMatches.push({
+    id: fileName,
+    fileName,
+    lobName,
+    section: 'Gross',
+    matchCount: 1,
+    matchedLabels: [lobName]
+  });
+}
+
+const workerAsset = fs.readdirSync('dist/assets')
+  .find(name => name.startsWith('transfer.worker-') && name.endsWith('.js'));
+assert.ok(workerAsset, 'compiled transfer worker asset is missing');
+await import(pathToFileURL(path.resolve('dist/assets', workerAsset)).href);
 assert.equal(typeof self.onmessage, 'function');
 self.onmessage({
   data: {
     type: 'start',
-    files: [{ file: inputFile, fieldName: 'lobFiles' }],
-    separateRi: false
+    files,
+    modelInput: {
+      grossHeaders: ['LOB', 'Value'],
+      riHeaders: ['LOB', 'Value'],
+      grossData: formats.map((_, index) => ({ LOB: `LOB-${index + 1}`, Value: 100 + index })),
+      riData: []
+    },
+    reserveData: {
+      gross: formats.map((_, index) => ({ lobName: `LOB-${index + 1}`, attrIBNR: 200 + index })),
+      ri: [],
+      errors: [],
+      missingSheets: []
+    },
+    grossMatches,
+    riMatches: []
   }
 });
 
 const result = await resultPromise;
-assert.equal(result.summary.processedFileCount, 1);
-assert.equal(result.summary.sheets.ACTUALS_FOR_VISUALIZATION.rowCount, 2);
-assert.equal(result.summary.sheets.ACTUALS_FOR_VISUALIZATION.sourceFileCount, 1);
-assert.ok(result.zipBlob.size > 0);
+assert.equal(result.summary.processedFileCount, 3);
+assert.equal(result.summary.skippedFiles.length, 0);
+const zip = await JSZip.loadAsync(await result.zipBlob.arrayBuffer());
+
+for (const [index, format] of formats.entries()) {
+  const entry = zip.file(`Gross/engine-${index + 1}.${format.extension}`);
+  assert.ok(entry, `${format.extension.toUpperCase()} output is missing`);
+  const bytes = await entry.async('uint8array');
+  const workbook = XLSX.read(bytes, { type: 'array', bookVBA: true });
+  assert.equal(workbook.Sheets.Modellinput.A9.v, `LOB-${index + 1}`);
+  assert.equal(workbook.Sheets.Modellinput.B9.v, 100 + index);
+  assert.equal(workbook.Sheets.Close_Incremental.EX9.v, 200 + index);
+  if (format.vba) {
+    assert.deepEqual(Array.from(workbook.vbaraw || []), Array.from(vbaPayload));
+  }
+}
+
 for (const channel of messageChannels) {
   channel.port1.close();
   channel.port2.close();
 }
-console.log('Compiled local worker: 2 rows and ZIP completed');
+console.log('Local transfer worker: XLSX, XLSM/VBA, and XLSB round trips passed');
 process.exit(0);

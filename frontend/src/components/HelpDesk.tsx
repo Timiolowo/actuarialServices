@@ -12,7 +12,7 @@ const troubleshootingItems = [
   },
   {
     title: 'File will not upload',
-    detail: 'Check the extension and file size. Combine Sheet accepts XLSX/XLSB up to 50 MB; Data Processing also accepts CSV, XLS, and XLSM.'
+    detail: 'Check the extension and file size. Combine Sheet accepts XLSX/XLSB up to 50 MB; Data Processing accepts XLS, XLSX, XLSB, and XLSM.'
   },
   {
     title: 'LOB file is unmatched',

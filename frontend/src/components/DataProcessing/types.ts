@@ -62,7 +62,7 @@ export const RESERVE_LOB_SHEETS = [
   'Motor CI', 'Motor PI',
 ] as const;
 
-export const SUPPORTED_UPLOAD_PATTERN = /\.(csv|xls|xlsx|xlsb|xlsm)$/i;
+export const SUPPORTED_UPLOAD_PATTERN = /\.(xls|xlsx|xlsb|xlsm)$/i;
 
 export const folderInputProps = { webkitdirectory: '', directory: '' } as {
   webkitdirectory: string;

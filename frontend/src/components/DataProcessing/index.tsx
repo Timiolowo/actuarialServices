@@ -92,7 +92,6 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
   const [verificationFile, setVerificationFile] = useState<File | null>(null);
 
   const [expandedLobs, setExpandedLobs] = useState<Set<string>>(new Set());
-  const [groupPiCi, setGroupPiCi] = useState<boolean | null>(null);
   const toggleLob = useCallback((lob: string) => {
     setExpandedLobs(prev => {
       const next = new Set(prev);
@@ -143,7 +142,6 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
     modelInput !== null && 
     reserveData !== null && 
     valuationDate !== null && 
-    groupPiCi !== null &&
     reserveData.missingSheets.length === 0 &&
     reserveData.errors.length === 0 &&
     reserveData.gross.every(lob => lob.dateMatches) &&
@@ -173,7 +171,6 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
     setParseError(null);
     setReserveData(null);
     setReserveParseError(null);
-    setGroupPiCi(null);
     setGrossUploadFiles([]);
     setRiUploadFiles([]);
     setGrossMatches([]);
@@ -328,7 +325,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
     const rejectedFiles = files.filter(f => !SUPPORTED_UPLOAD_PATTERN.test(f.name));
     if (nextFiles.length === 0) {
       const rejectedNames = rejectedFiles.slice(0, 3).map(file => file.name).join(', ');
-      const msg = `No supported ${sectionLabel} files were selected.${rejectedNames ? ` Unsupported: ${rejectedNames}.` : ''} Use CSV, XLS, XLSX, XLSB, or XLSM.`;
+      const msg = `No supported ${sectionLabel} files were selected.${rejectedNames ? ` Unsupported: ${rejectedNames}.` : ''} Use XLS, XLSX, XLSB, or XLSM.`;
       if (section === 'gross') setGrossUploadError(msg);
       else setRiUploadError(msg);
       showToast({ type: 'error', title: `${sectionLabel} upload rejected`, message: msg });
@@ -532,15 +529,15 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
         ) : (
           <div style={{ textAlign: 'center' }}>
             <p style={{ fontWeight: 500, marginBottom: '0.25rem' }}>Drop files or folder here</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Supports CSV, XLS, XLSX, XLSB, and XLSM</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Supports XLS, XLSX, XLSB, and XLSM</p>
           </div>
         )}
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '0.75rem' }}>
           <button type="button" className="btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.75rem', borderRadius: '6px', ...MONO_STYLE }} onClick={e => { e.stopPropagation(); fileRef.current?.click(); }}>Browse Files</button>
           <button type="button" className="btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.75rem', borderRadius: '6px', ...MONO_STYLE }} onClick={e => { e.stopPropagation(); folderRef.current?.click(); }}>Browse Folder</button>
         </div>
-        <input type="file" ref={fileRef} accept=".csv,.xls,.xlsx,.xlsb,.xlsm" multiple style={{ display: 'none' }} onChange={e => { handleSectionUploads(section, Array.from(e.target.files || [])); e.target.value = ''; }} />
-        <input type="file" ref={folderRef} accept=".csv,.xls,.xlsx,.xlsb,.xlsm" multiple style={{ display: 'none' }} {...folderInputProps} onChange={e => { handleSectionUploads(section, Array.from(e.target.files || [])); e.target.value = ''; }} />
+        <input type="file" ref={fileRef} accept=".xls,.xlsx,.xlsb,.xlsm" multiple style={{ display: 'none' }} onChange={e => { handleSectionUploads(section, Array.from(e.target.files || [])); e.target.value = ''; }} />
+        <input type="file" ref={folderRef} accept=".xls,.xlsx,.xlsb,.xlsm" multiple style={{ display: 'none' }} {...folderInputProps} onChange={e => { handleSectionUploads(section, Array.from(e.target.files || [])); e.target.value = ''; }} />
       </div>
       {error && renderErrorAlert(error)}
     </div>
@@ -654,14 +651,6 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
                   <button type="button" className={`toggle-btn ${openingStrategy === 'change' ? 'active' : ''}`} onClick={() => setOpeningStrategy('change')}>Change</button>
                 </div>
               </div>
-
-              <div className="form-group">
-                <label className="form-label">Group PI & CI</label>
-                <div className="toggle-group">
-                  <button type="button" className={`toggle-btn ${groupPiCi === true ? 'active' : ''}`} onClick={() => setGroupPiCi(true)}>Yes</button>
-                  <button type="button" className={`toggle-btn ${groupPiCi === false ? 'active' : ''}`} onClick={() => setGroupPiCi(false)}>No</button>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -712,7 +701,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
                   ].map(({ title, headers, data }) => {
                     const lobCol = headers[0];
                     const numCols = headers.slice(1);
-                    const parentGroups = groupPiCi ? ['Fire', 'GA', 'Motor'] : [];
+                    const parentGroups = ['Fire', 'GA', 'Motor'];
                     
                     const map = new Map<string, any>();
                     data.forEach(r => {
@@ -841,7 +830,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
                                 }
                               });
 
-                              const parentGroups = groupPiCi ? ['Fire', 'GA', 'Motor'] : [];
+                              const parentGroups = ['Fire', 'GA', 'Motor'];
                               const displayRows: any[] = [];
                               
                               const standaloneLobs = Array.from(map.values()).filter(r => !parentGroups.some(p => r.lob.startsWith(p + ' ')));
@@ -1524,7 +1513,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
                   _portfolioId, 
                   grossUploadFiles, 
                   riUploadFiles, 
-                  !groupPiCi, 
+                  true,
                   modelInput, 
                   reserveData, 
                   grossMatches, 

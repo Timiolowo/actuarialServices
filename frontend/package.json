@@ -7,12 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:workers": "node local-worker-test.mjs && node local-transfer-worker-test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.229",
     "ai": "^6.0.227",
-    "better-auth": "^1.6.23",
     "jszip": "^3.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

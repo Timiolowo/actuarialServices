@@ -52,13 +52,13 @@ const HELP_DESK_SYSTEM_PROMPT = `You are the Help Desk assistant for the Actuari
 
 Product knowledge:
 - Users select Group Life, Individual Life, Health Care, or Property & Casualty portfolios.
-- Combine Sheet accepts Gross and Reinsurance workbooks, consolidates configured actuarial sheets, shows job progress and logs, and provides a ZIP download. Backend consolidation accepts XLSX and XLSB files up to 50 MB each.
+- Combine Sheet processes Gross and Reinsurance XLSX/XLSB workbooks locally in the browser and provides a ZIP download without uploading the workbooks.
 - Data Processing is a four-step workflow: Parameters, Upload Data, Data Summary, and Review.
 - Parameters requires a valuation year and month, opening-balance treatment, and a Reserve Split Template. The template is parsed from Modellinput and expected LOB sheets. Valuation-date mismatches must be fixed before continuing.
-- Upload Data accepts CSV, XLS, XLSX, XLSB, and XLSM Gross and Reinsurance files or folders and matches them to lines of business.
+- Upload Data accepts XLS, XLSX, XLSB, and XLSM Gross and Reinsurance files or folders, matches them to lines of business, and transfers data locally in the browser.
 - Data Summary separates Attritional IBNR, Large Loss IBNR, and Outstanding Claims (OCR), with prior-year, current-year, and total values.
 - Review confirms configuration, file matches, reserve dates, and optional CSV verification results.
-- Common problems include unsupported files, files over 50 MB, missing or misspelled sheet names, valuation-date mismatches, unmatched LOB files, empty Modellinput data, backend connection failures, browser memory limits, and failed downloads.
+- Common problems include unsupported files, missing or misspelled sheet names, valuation-date mismatches, unmatched LOB files, empty Modellinput data, browser memory limits, and failed downloads.
 
 Support behavior:
 1. Identify the portfolio, workflow page, step, and exact error before making assumptions.
@@ -244,10 +244,9 @@ async function materializeCsv(rawPath, csvPath, headers, numericHeaders) {
   };
 }
 
-function createJob(fileCount, ownerUserId) {
+function createJob(fileCount) {
   const job = {
     id: randomUUID(),
-    ownerUserId,
     status: 'queued',
     currentStatus: 'Queued for processing.',
     progressPercent: 0,
@@ -323,7 +322,7 @@ async function cleanupStagedUpload(uploadId) {
   await Promise.all(stagedUpload.files.map(file => safeUnlink(file.path)));
 }
 
-function requireOwnedStagedUpload(req, res, next) {
+function loadStagedUpload(req, res, next) {
   const stagedUpload = stagedUploads.get(req.params.uploadId);
   if (!stagedUpload) {
     return res.status(404).json({ error: 'Upload session not found or expired.' });
@@ -687,7 +686,6 @@ app.post('/api/process/uploads', (req, res) => {
 
   const stagedUpload = {
     id: randomUUID(),
-    ownerUserId: 'anonymous',
     expectedFileCount,
     files: [],
     separateRi: req.body?.separateRi === true,
@@ -710,7 +708,7 @@ app.post('/api/process/uploads', (req, res) => {
 
 app.post(
   '/api/process/uploads/:uploadId/files',
-  requireOwnedStagedUpload,
+  loadStagedUpload,
   upload.any(),
   async (req, res, next) => {
     const files = req.files || [];
@@ -748,7 +746,7 @@ app.post(
 
 app.post(
   '/api/process/uploads/:uploadId/start',
-  requireOwnedStagedUpload,
+  loadStagedUpload,
   (req, res) => {
     const stagedUpload = req.stagedUpload;
     if (stagedUpload.files.length !== stagedUpload.expectedFileCount) {
@@ -760,7 +758,7 @@ app.post(
     if (stagedUpload.cleanupTimer) clearTimeout(stagedUpload.cleanupTimer);
     stagedUploads.delete(stagedUpload.id);
 
-    const job = createJob(stagedUpload.files.length, 'anonymous');
+    const job = createJob(stagedUpload.files.length);
     job.separateRi = stagedUpload.separateRi;
     job.modelInput = stagedUpload.modelInput;
     job.reserveData = stagedUpload.reserveData;
@@ -788,7 +786,7 @@ app.post(
 
 app.delete(
   '/api/process/uploads/:uploadId',
-  requireOwnedStagedUpload,
+  loadStagedUpload,
   async (req, res, next) => {
     try {
       await cleanupStagedUpload(req.params.uploadId);
@@ -806,7 +804,7 @@ app.post('/api/process', upload.any(), (req, res) => {
     return res.status(400).json({ error: 'Please upload at least one XLSX or XLSB file.' });
   }
 
-  const job = createJob(files.length, 'anonymous');
+  const job = createJob(files.length);
   job.separateRi = req.body.separateRi === 'true';
 
   if (req.body.modelInput) {

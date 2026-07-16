@@ -48,7 +48,7 @@ export const HowToUse: React.FC = () => (
         <h2>Prepare your files</h2>
       </div>
       <ul>
-        <li>Use CSV, XLS, XLSX, XLSB, or XLSM files.</li>
+        <li>Use XLS, XLSX, XLSB, or XLSM calculation-engine files.</li>
         <li>Confirm that the Reserve Split Template contains the expected LOB sheets.</li>
         <li>Know the correct valuation month before uploading the template.</li>
         <li>Keep Gross and Reinsurance source files in separate folders where possible.</li>
