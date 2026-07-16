@@ -13,6 +13,7 @@ export interface EpWorkerMessage {
   status?: string;
   blob?: Blob;
   summary?: any[];
+  detailRows?: any[];
   message?: string;
 }
 
@@ -20,14 +21,12 @@ const msPerDay = 1000 * 60 * 60 * 24;
 
 function parseDate(d: any): Date | null {
   if (!d) return null;
-  // Handle Excel serial dates
   if (typeof d === 'number') {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     return new Date(epoch.getTime() + d * msPerDay);
   }
   const t = new Date(d);
   if (isNaN(t.getTime())) return null;
-  // Force UTC midnight to avoid timezone shifting
   return new Date(Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()));
 }
 
@@ -106,6 +105,11 @@ function calcDac(unperiod: number, duration: number, comm: number): number {
   return isNaN(out) || !isFinite(out) ? 0 : out;
 }
 
+function fixVal(v: any): number {
+  const n = Number(v);
+  return (isNaN(n) || !isFinite(n)) ? 0 : n;
+}
+
 function postProgress(status: string, progressPercent: number) {
   self.postMessage({ type: 'progress', status, progressPercent });
 }
@@ -129,7 +133,7 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
     const buffer = await file.arrayBuffer();
     const metadata = await parquetMetadataAsync(buffer);
     const colNames = metadata.schema.slice(1).map((s: any) => s.name);
-    
+
     await parquetRead({
       file: buffer,
       onComplete: (data) => {
@@ -152,14 +156,10 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
   }
 
   if (rows.length > 0) {
-    const extractedCols = Object.keys(rows[0]);
-    console.log('Extracted Columns:', extractedCols);
-    console.log('Bottom 10 Rows:', rows.slice(-10));
-
     const requiredCols = ['REGISTRATN_DT', 'START_DATE', 'END_DATE', 'CLASS', 'PREMIUM', 'COMM'];
+    const extractedCols = Object.keys(rows[0]);
     const lowerExtractedCols = extractedCols.map(c => c.toLowerCase());
     const missingCols = requiredCols.filter(req => !lowerExtractedCols.includes(req.toLowerCase()));
-    
     if (missingCols.length > 0) {
       throw new Error(`Missing required columns: ${missingCols.join(', ')}`);
     }
@@ -181,23 +181,28 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
     unearnedPremium: number;
     dac: number;
     gwpYtd: number;
+    exposure: number;
   }>();
+
+  const detailRows: any[] = [];
 
   for (let i = 0; i < filtered.length; i++) {
     if (i % 5000 === 0) {
       postProgress(`Processing row ${i} / ${filtered.length}`, 40 + (i / filtered.length) * 30);
     }
     const r = filtered[i];
-    
+
     // Normalize keys
+    const policyKey = r.POLICYKEY || r.policykey || r.POLICY_KEY || '';
+    const custName = r.CUSTOMER_NAME || r.customer_name || r.CUST_NAME || r['CUST NAME'] || '';
     const policyClass = (r.CLASS || r.class || '').toString().toUpperCase();
-    const premium = Number(r.PREMIUM || r.premium) || 0;
-    const comm = Number(r.COMM || r.comm) || 0;
-    
-    const regDate = parseDate(r.REGISTRATN_DT || r.registratn_dt);
+    const premium = fixVal(r.PREMIUM || r.premium || r['GROSS PREMIUM']);
+    const comm = fixVal(r.COMM || r.comm || r.COMMISSION);
+
+    const regDate = parseDate(r.REGISTRATN_DT || r.registratn_dt || r['REG DATE']);
     const startDate = parseDate(r.START_DATE || r.start_date);
     let endDate = parseDate(r.END_DATE || r.end_date);
-    
+
     if (!regDate || !startDate) continue;
 
     endDate = getEndDate(policyClass, startDate, endDate);
@@ -213,69 +218,135 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
     const unearnedPrm = unepremium(unep, duration, premium);
     const dacVal = calcDac(unep, duration, comm);
 
+    // Sanitize calculated values
+    const safeEarnedPrm = fixVal(earnedPrm);
+    const safeUnearnedPrm = fixVal(unearnedPrm);
+    const safeDac = fixVal(dacVal);
+    const safeGwp = fixVal(gwp);
+
+    // Accumulate summary
     if (!summaryMap.has(policyClass)) {
-      summaryMap.set(policyClass, { earnedPremium: 0, unearnedPremium: 0, dac: 0, gwpYtd: 0 });
+      summaryMap.set(policyClass, { earnedPremium: 0, unearnedPremium: 0, dac: 0, gwpYtd: 0, exposure: 0 });
     }
     const s = summaryMap.get(policyClass)!;
-    s.earnedPremium += earnedPrm;
-    s.unearnedPremium += unearnedPrm;
-    s.dac += dacVal;
-    s.gwpYtd += gwp;
+    s.earnedPremium += safeEarnedPrm;
+    s.unearnedPremium += safeUnearnedPrm;
+    s.dac += safeDac;
+    s.gwpYtd += safeGwp;
+    s.exposure += expDays;
+
+    // Collect detail row
+    detailRows.push({
+      policyKey,
+      custName,
+      startDate: startDate.toISOString().split('T')[0],
+      endDate: endDate.toISOString().split('T')[0],
+      premium,
+      commission: comm,
+      class: policyClass,
+      regDate: regDate.toISOString().split('T')[0],
+      duration,
+      exposedDays: expDays,
+      earnedFrac,
+      earnedPremium: safeEarnedPrm,
+      unePeriod: unep,
+      unearnedPremium: safeUnearnedPrm,
+      dac: safeDac,
+      gwpYtd: safeGwp
+    });
   }
 
   postProgress('Generating Excel Output...', 75);
 
-  // We use ExcelJS to inject into the template
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(templateBuffer);
-  
-  const resultSheet = wb.getWorksheet('RESULT');
-  if (resultSheet) {
-    // Write dates as proper Date objects
-    const startDateCell = resultSheet.getCell('D2');
-    startDateCell.value = new Date(valStartStr);
-    startDateCell.numFmt = 'DD/MM/YYYY';
 
-    const endDateCell = resultSheet.getCell('G2');
-    endDateCell.value = new Date(valEndStr);
-    endDateCell.numFmt = 'DD/MM/YYYY';
+  // --- Write "Calculation" sheet ---
+  const calcSheet = wb.getWorksheet('Calculation');
+  if (calcSheet) {
+    // Cell E1 = Start Period, Cell G1 = Val Date
+    calcSheet.getCell('E1').value = new Date(valStartStr);
+    calcSheet.getCell('E1').numFmt = 'DD/MM/YYYY';
+    calcSheet.getCell('H1').value = new Date(valEndStr);
+    calcSheet.getCell('H1').numFmt = 'DD/MM/YYYY';
 
-    // Row 4 has headers in the template, data starts at row 5
-    let rowNum = 5;
-    let totEarned = 0, totUnearned = 0, totDac = 0, totGwp = 0;
+    // Data starts at row 3. Columns: A..P = policyKey, custName, startDate, endDate, premium, commission,
+    // class, regDate, duration, exposedDays, earnedFrac, earnedPremium, unePeriod, unearnedPremium, dac, gwpYtd
+    let rowNum = 3;
+    for (const d of detailRows) {
+      const row = calcSheet.getRow(rowNum);
+      row.getCell(1).value = d.policyKey;
+      row.getCell(2).value = d.custName;
+      row.getCell(3).value = d.startDate;
+      row.getCell(4).value = d.endDate;
+      row.getCell(5).value = d.premium;
+      row.getCell(6).value = d.commission;
+      row.getCell(7).value = d.class;
+      row.getCell(8).value = d.regDate;
+      row.getCell(9).value = d.duration;
+      row.getCell(10).value = d.exposedDays;
+      row.getCell(11).value = d.earnedFrac;
+      row.getCell(12).value = d.earnedPremium;
+      row.getCell(13).value = d.unePeriod;
+      row.getCell(14).value = d.unearnedPremium;
+      row.getCell(15).value = d.dac;
+      row.getCell(16).value = d.gwpYtd;
+      row.commit();
+      rowNum++;
+    }
+  }
+
+  // --- Write "Summary" sheet ---
+  const summarySheet = wb.getWorksheet('Summary');
+  if (summarySheet) {
+    let rowNum = 1;
+    let totEarned = 0, totUnearned = 0, totDac = 0, totGwp = 0, totExp = 0;
 
     for (const [cls, s] of summaryMap.entries()) {
-      const row = resultSheet.getRow(rowNum);
-      row.getCell(3).value = cls;
-      row.getCell(4).value = s.earnedPremium;
-      row.getCell(5).value = s.unearnedPremium;
-      row.getCell(6).value = s.dac;
-      row.getCell(7).value = s.gwpYtd;
+      const row = summarySheet.getRow(rowNum);
+      row.getCell(1).value = cls;
+      row.getCell(2).value = s.earnedPremium;
+      row.getCell(3).value = s.unearnedPremium;
+      row.getCell(4).value = s.dac;
+      row.getCell(5).value = s.gwpYtd;
+      row.getCell(6).value = s.exposure;
       row.commit();
-
       totEarned += s.earnedPremium;
       totUnearned += s.unearnedPremium;
       totDac += s.dac;
       totGwp += s.gwpYtd;
-
+      totExp += s.exposure;
       rowNum++;
     }
 
-    const totRow = resultSheet.getRow(rowNum);
-    totRow.getCell(3).value = 'TOTAL';
-    totRow.getCell(4).value = totEarned;
-    totRow.getCell(5).value = totUnearned;
-    totRow.getCell(6).value = totDac;
-    totRow.getCell(7).value = totGwp;
+    // Total row
+    const totRow = summarySheet.getRow(rowNum);
+    totRow.getCell(1).value = 'TOTAL';
+    totRow.getCell(2).value = totEarned;
+    totRow.getCell(3).value = totUnearned;
+    totRow.getCell(4).value = totDac;
+    totRow.getCell(5).value = totGwp;
+    totRow.getCell(6).value = totExp;
     totRow.commit();
   }
 
   postProgress('Finalizing Excel File...', 90);
   const outBuffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([outBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  
-  const summaryArray = Array.from(summaryMap.entries()).map(([cls, s]) => ({ class: cls, ...s }));
-  self.postMessage({ type: 'complete', blob, summary: summaryArray });
+
+  const summaryArray = Array.from(summaryMap.entries())
+    .map(([cls, s]) => ({
+      class: cls,
+      earnedPremium: s.earnedPremium,
+      unearnedPremium: s.unearnedPremium,
+      dac: s.dac,
+      gwpYtd: s.gwpYtd,
+      exposure: s.exposure,
+      total: s.earnedPremium + s.unearnedPremium + s.dac + s.gwpYtd
+    }))
+    .sort((a, b) => a.class.localeCompare(b.class));
+
+  self.postMessage({ type: 'complete', blob, summary: summaryArray, detailRows });
 }
 
 self.onmessage = (event: MessageEvent<EpWorkerMessage>) => {

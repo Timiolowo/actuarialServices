@@ -1,8 +1,43 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import EpWorker from '../../workers/earnedPremium.worker?worker';
 
 interface EarnedPremiumProps {
   onBack: () => void;
+}
+
+type ViewTab = 'summary' | 'detail';
+
+const DETAIL_COLUMNS = [
+  { key: 'policyKey', label: 'Policy Key' },
+  { key: 'custName', label: 'Customer Name' },
+  { key: 'class', label: 'Class' },
+  { key: 'startDate', label: 'Start Date' },
+  { key: 'endDate', label: 'End Date' },
+  { key: 'premium', label: 'Premium', numeric: true },
+  { key: 'commission', label: 'Commission', numeric: true },
+  { key: 'regDate', label: 'Reg Date' },
+  { key: 'duration', label: 'Duration', numeric: true },
+  { key: 'exposedDays', label: 'Exposed Days', numeric: true },
+  { key: 'earnedFrac', label: 'Earned Frac', numeric: true },
+  { key: 'earnedPremium', label: 'Earned Premium', numeric: true },
+  { key: 'unePeriod', label: 'UNE Period', numeric: true },
+  { key: 'unearnedPremium', label: 'Unearned Premium', numeric: true },
+  { key: 'dac', label: 'DAC', numeric: true },
+  { key: 'gwpYtd', label: 'GWP YTD', numeric: true },
+];
+
+const ROWS_PER_PAGE = 50;
+
+function formatNum(v: any): string {
+  const n = Number(v);
+  if (isNaN(n)) return '0.00';
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatInt(v: any): string {
+  const n = Number(v);
+  if (isNaN(n)) return '0';
+  return Math.round(n).toLocaleString();
 }
 
 export function EarnedPremium({ onBack }: EarnedPremiumProps) {
@@ -14,14 +49,23 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
   const [file, setFile] = useState<File | null>(null);
   const [valStart, setValStart] = useState(defStart);
   const [valEnd, setValEnd] = useState(defEnd);
-  
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [hasResults, setHasResults] = useState(false);
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [summaryData, setSummaryData] = useState<any[]>([]);
+  const [detailRows, setDetailRows] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // View state
+  const [activeTab, setActiveTab] = useState<ViewTab>('summary');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [currentPage, setCurrentPage] = useState(0);
+
+  // Drag state
   const [dragActive, setDragActive] = useState(false);
 
   const workerRef = useRef<Worker | null>(null);
@@ -29,9 +73,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
 
   useEffect(() => {
     return () => {
-      if (workerRef.current) {
-        workerRef.current.terminate();
-      }
+      if (workerRef.current) workerRef.current.terminate();
     };
   }, []);
 
@@ -61,7 +103,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     setResultBlob(null);
 
     try {
-      const templateRes = await fetch('https://raw.githubusercontent.com/Timiolowo/actuarialServices/main/frontend/public/templates/Earned%20Premium%20Template.xlsx');
+      const templateRes = await fetch('https://raw.githubusercontent.com/Timiolowo/actuarialServices/main/frontend/public/templates/Earned%20Premium%20Data.xlsx');
       if (!templateRes.ok) throw new Error('Could not load Excel template from server.');
       const templateBuffer = await templateRes.arrayBuffer();
 
@@ -76,6 +118,11 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           setHasResults(true);
           setResultBlob(data.blob);
           if (data.summary) setSummaryData(data.summary);
+          if (data.detailRows) setDetailRows(data.detailRows);
+          setCurrentPage(0);
+          setSearchQuery('');
+          setColumnFilters({});
+          setActiveTab('summary');
           workerRef.current?.terminate();
         } else if (data.type === 'error') {
           setIsProcessing(false);
@@ -109,10 +156,47 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     URL.revokeObjectURL(url);
   };
 
+  // ---- Filtered and paginated detail data ----
+  const filteredDetail = useMemo(() => {
+    let data = detailRows;
+
+    // Global search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      data = data.filter(row =>
+        DETAIL_COLUMNS.some(col => {
+          const v = row[col.key];
+          return v != null && String(v).toLowerCase().includes(q);
+        })
+      );
+    }
+
+    // Per-column filters
+    for (const [colKey, filterVal] of Object.entries(columnFilters)) {
+      if (!filterVal.trim()) continue;
+      const fv = filterVal.toLowerCase();
+      data = data.filter(row => {
+        const v = row[colKey];
+        return v != null && String(v).toLowerCase().includes(fv);
+      });
+    }
+
+    return data;
+  }, [detailRows, searchQuery, columnFilters]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredDetail.length / ROWS_PER_PAGE));
+  const safePage = Math.min(currentPage, totalPages - 1);
+  const pageRows = filteredDetail.slice(safePage * ROWS_PER_PAGE, (safePage + 1) * ROWS_PER_PAGE);
+
+  const setColumnFilter = (key: string, value: string) => {
+    setColumnFilters(prev => ({ ...prev, [key]: value }));
+    setCurrentPage(0);
+  };
+
   return (
     <div className="container" style={{ animation: 'fadeIn 0.4s ease-out', paddingTop: '1.75rem' }}>
-      
-      {/* Breadcrumb back + subtitle */}
+
+      {/* Breadcrumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '2rem' }}>
         <button className="btn-secondary" onClick={onBack} style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="14" height="14"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
@@ -150,7 +234,6 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           </div>
           <h2 style={{ marginBottom: '0.5rem', fontSize: '1.5rem', fontWeight: 600 }}>{statusMsg || 'Calculating...'}</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '400px', margin: '0 auto' }}>Applying actuarial methodologies to massive datasets locally without uploading to a server.</p>
-          
           <div className="progress-bar-container" style={{ height: '6px', margin: '2rem auto 0 auto', maxWidth: '400px' }}>
             <div className="progress-bar-fill" style={{ width: `${progress}%`, height: '100%', background: 'var(--primary)', borderRadius: '9999px', transition: 'width 0.25s ease-out' }}></div>
           </div>
@@ -158,7 +241,6 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
       ) : !hasResults ? (
         <>
           <div className="glass-panel" style={{ padding: '2.5rem' }}>
-            
             {/* Parameters Section */}
             <div style={{ marginBottom: '3rem' }}>
               <h3 style={{ fontSize: '1.1rem', marginBottom: '1.5rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -167,37 +249,20 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                 </svg>
                 Valuation Parameters
               </h3>
-              
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>Valuation Start Date</label>
-                  <input 
-                    type="date" 
-                    value={valStart} 
-                    onChange={e => setValStart(e.target.value)} 
-                    style={{ 
-                      width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', 
-                      border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)',
-                      fontFamily: 'inherit', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s'
-                    }} 
+                  <input type="date" value={valStart} onChange={e => setValStart(e.target.value)}
+                    style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontFamily: 'inherit', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s' }}
                     onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
-                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
-                  />
+                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>Valuation End Date</label>
-                  <input 
-                    type="date" 
-                    value={valEnd} 
-                    onChange={e => setValEnd(e.target.value)} 
-                    style={{ 
-                      width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', 
-                      border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)',
-                      fontFamily: 'inherit', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s'
-                    }} 
+                  <input type="date" value={valEnd} onChange={e => setValEnd(e.target.value)}
+                    style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontFamily: 'inherit', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s' }}
                     onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
-                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
-                  />
+                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
                 </div>
               </div>
             </div>
@@ -210,55 +275,32 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                 </svg>
                 Production Data
               </h3>
-              
-              <div 
-                className={`upload-zone ${dragActive ? 'drag-active' : ''}`}
+              <div className={`upload-zone ${dragActive ? 'drag-active' : ''}`}
                 onDragOver={(e) => handleDrag(e, true)}
                 onDragLeave={(e) => handleDrag(e, false)}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                style={{ cursor: 'pointer', padding: '1.25rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1.25rem' }}
-              >
-                <input 
-                  type="file" 
-                  ref={fileInputRef}
-                  accept=".csv,.parquet,.xlsx,.xls"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setFile(f);
-                      setHasResults(false);
-                      setErrorMsg('');
-                    }
-                    e.target.value = '';
-                  }}
-                  style={{ display: 'none' }}
-                />
-
+                style={{ cursor: 'pointer', padding: '1.25rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+                <input type="file" ref={fileInputRef} accept=".csv,.parquet,.xlsx,.xls"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFile(f); setHasResults(false); setErrorMsg(''); } e.target.value = ''; }}
+                  style={{ display: 'none' }} />
                 <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(56, 189, 248, 0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'var(--primary)' }}>
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z" />
                   </svg>
                 </div>
-                
                 {file ? (
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
                       <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>{file.name}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{(file.size / 1024 / 1024).toFixed(2)} MB</div>
                     </div>
-                    <button type="button" className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setFile(null); }}>
-                      Remove
-                    </button>
+                    <button type="button" className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setFile(null); }}>Remove</button>
                   </div>
                 ) : (
                   <div style={{ flex: 1 }}>
-                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.95rem', color: 'var(--text)' }}>
-                      <strong>Click to browse</strong> or drag file here
-                    </p>
-                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                      Supports .parquet, .csv, and .xlsx
-                    </p>
+                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.95rem', color: 'var(--text)' }}><strong>Click to browse</strong> or drag file here</p>
+                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.75rem' }}>Supports .parquet, .csv, and .xlsx</p>
                   </div>
                 )}
               </div>
@@ -267,19 +309,12 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
 
           <div className="glass-panel action-bar">
             <div style={{ display: 'flex', gap: '1rem' }}>
-              <button 
-                className="btn-primary" 
-                style={{ padding: '0.75rem 2rem', fontSize: '1rem', fontWeight: 600 }}
-                onClick={handleProcess}
-                disabled={isProcessing || !file}
-              >
+              <button className="btn-primary" style={{ padding: '0.75rem 2rem', fontSize: '1rem', fontWeight: 600 }}
+                onClick={handleProcess} disabled={isProcessing || !file}>
                 Calculate Earned Premium
               </button>
-              <button 
-                className="btn-secondary" 
-                onClick={() => { setFile(null); setValStart(defStart); setValEnd(defEnd); }}
-                disabled={isProcessing || !file}
-              >
+              <button className="btn-secondary" onClick={() => { setFile(null); setValStart(defStart); setValEnd(defEnd); }}
+                disabled={isProcessing || !file}>
                 Clear
               </button>
             </div>
@@ -287,53 +322,21 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
         </>
       ) : (
         <div style={{ animation: 'fadeIn 0.4s ease-out' }}>
-          <div className="glass-panel" style={{ padding: '4rem 2rem', textAlign: 'center' }}>
-            
-            <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'center' }}>
-              <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'rgba(34, 197, 94, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" width="40" height="40">
+          {/* Success Header */}
+          <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', marginBottom: '1.5rem' }}>
+            <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'center' }}>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(34, 197, 94, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" width="32" height="32">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
             </div>
-
-            <h2 style={{ margin: '0 0 1rem 0', fontSize: '2rem', fontWeight: 600 }}>Calculation Complete!</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '2.5rem', maxWidth: '450px', margin: '0 auto 2.5rem auto', lineHeight: 1.6 }}>
-              The dataset was successfully processed locally. Your summary and detailed sheets have been injected into the Earned Premium Template.
+            <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem', fontWeight: 600 }}>Calculation Complete!</h2>
+            <p style={{ color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto 1.5rem auto', lineHeight: 1.6 }}>
+              {detailRows.length.toLocaleString()} rows processed. Your summary and detailed sheets have been injected into the Earned Premium Template.
             </p>
-            
-            {summaryData.length > 0 && (
-              <div style={{ marginBottom: '2.5rem', textAlign: 'left', background: 'var(--bg-input)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)', overflowX: 'auto' }}>
-                <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: 'var(--text)' }}>Result Preview</h3>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Class</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Earned Premium</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Unearned Premium</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>DAC</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>GWP YTD</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summaryData.map((row, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <td style={{ padding: '0.75rem', color: 'var(--text)' }}>{row.class}</td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{row.earnedPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{row.unearnedPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{row.dac.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{row.gwpYtd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            
             <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-              <button className="btn-secondary" onClick={() => { setFile(null); setHasResults(false); }}>
-                Start Over
-              </button>
+              <button className="btn-secondary" onClick={() => { setFile(null); setHasResults(false); }}>Start Over</button>
               <button className="btn-primary" onClick={downloadResult} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="20" height="20">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
@@ -341,11 +344,205 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                 Download Earned Premium Report
               </button>
             </div>
-
           </div>
+
+          {/* Tab Navigation */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
+            <button onClick={() => setActiveTab('summary')}
+              style={{
+                padding: '0.5rem 1.25rem', borderRadius: '6px', border: 'none', cursor: 'pointer',
+                fontFamily: 'monospace', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em',
+                background: activeTab === 'summary' ? 'var(--primary)' : 'transparent',
+                color: activeTab === 'summary' ? '#000' : 'var(--text-muted)',
+                fontWeight: activeTab === 'summary' ? 700 : 400,
+                transition: 'all 0.2s'
+              }}>
+              Summary
+            </button>
+            <button onClick={() => setActiveTab('detail')}
+              style={{
+                padding: '0.5rem 1.25rem', borderRadius: '6px', border: 'none', cursor: 'pointer',
+                fontFamily: 'monospace', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em',
+                background: activeTab === 'detail' ? 'var(--primary)' : 'transparent',
+                color: activeTab === 'detail' ? '#000' : 'var(--text-muted)',
+                fontWeight: activeTab === 'detail' ? 700 : 400,
+                transition: 'all 0.2s'
+              }}>
+              Detail ({detailRows.length.toLocaleString()})
+            </button>
+          </div>
+
+          {/* Summary Tab */}
+          {activeTab === 'summary' && summaryData.length > 0 && (
+            <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
+              <h3 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text)' }}>Summary by Class</h3>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '0.75rem', textAlign: 'left' }}>Class</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>Earned Premium</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>Unearned Premium</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>DAC</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>GWP YTD</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summaryData.map((row, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <td style={{ padding: '0.75rem', color: 'var(--text)', fontWeight: 500 }}>{row.class}</td>
+                      <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.earnedPremium)}</td>
+                      <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.unearnedPremium)}</td>
+                      <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.dac)}</td>
+                      <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.gwpYtd)}</td>
+                      <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', borderLeft: '2px solid var(--primary)', fontWeight: 700, color: 'var(--primary)' }}>{formatNum(row.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: '2px solid var(--primary)', fontWeight: 700, background: 'rgba(56, 189, 248, 0.04)' }}>
+                    <td style={{ padding: '0.75rem', color: 'var(--text)', fontSize: '0.95rem' }}>TOTAL</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.earnedPremium, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.unearnedPremium, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.dac, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.gwpYtd, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', borderLeft: '2px solid var(--primary)', color: 'var(--primary)', fontSize: '0.95rem' }}>{formatNum(summaryData.reduce((s, r) => s + r.total, 0))}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+
+          {/* Detail Tab */}
+          {activeTab === 'detail' && (
+            <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
+              {/* Search + Filter bar */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem', alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: '1 1 280px', minWidth: '200px' }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="16" height="16"
+                    style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                  </svg>
+                  <input
+                    type="text"
+                    placeholder="Search all columns..."
+                    value={searchQuery}
+                    onChange={e => { setSearchQuery(e.target.value); setCurrentPage(0); }}
+                    style={{
+                      width: '100%', padding: '0.6rem 0.75rem 0.6rem 2.25rem', borderRadius: '6px',
+                      border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)',
+                      fontFamily: 'inherit', fontSize: '0.85rem', outline: 'none', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                  {filteredDetail.length.toLocaleString()} / {detailRows.length.toLocaleString()} rows
+                </span>
+              </div>
+
+              {/* Column filter inputs */}
+              <details style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                <summary style={{ cursor: 'pointer', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Column Filters
+                </summary>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  {DETAIL_COLUMNS.map(col => (
+                    <div key={col.key} style={{ flex: '0 0 auto', minWidth: '130px' }}>
+                      <label style={{ display: 'block', fontSize: '0.65rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem', color: 'var(--text-muted)' }}>
+                        {col.label}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Filter..."
+                        value={columnFilters[col.key] || ''}
+                        onChange={e => setColumnFilter(col.key, e.target.value)}
+                        style={{
+                          width: '100%', padding: '0.35rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem',
+                          border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)',
+                          outline: 'none', boxSizing: 'border-box'
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </details>
+
+              {/* Data table */}
+              <div style={{ overflowX: 'auto', maxHeight: '600px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                    <tr style={{ background: 'var(--bg-input)', borderBottom: '2px solid var(--border-color)' }}>
+                      <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>#</th>
+                      {DETAIL_COLUMNS.map(col => (
+                        <th key={col.key} style={{ padding: '0.5rem 0.6rem', textAlign: col.numeric ? 'right' : 'left', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+                          {col.label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={DETAIL_COLUMNS.length + 1} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          No rows match your filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      pageRows.map((row, i) => (
+                        <tr key={safePage * ROWS_PER_PAGE + i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '0.4rem 0.6rem', color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                            {safePage * ROWS_PER_PAGE + i + 1}
+                          </td>
+                          {DETAIL_COLUMNS.map(col => (
+                            <td key={col.key} style={{
+                              padding: '0.4rem 0.6rem',
+                              textAlign: col.numeric ? 'right' : 'left',
+                              fontFamily: col.numeric ? 'monospace' : 'inherit',
+                              whiteSpace: 'nowrap',
+                              color: 'var(--text)'
+                            }}>
+                              {col.numeric
+                                ? (col.key === 'duration' || col.key === 'exposedDays' || col.key === 'unePeriod'
+                                  ? formatInt(row[col.key])
+                                  : formatNum(row[col.key]))
+                                : (row[col.key] || '')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {filteredDetail.length > ROWS_PER_PAGE && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                  <button className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                    disabled={safePage === 0} onClick={() => setCurrentPage(0)}>
+                    First
+                  </button>
+                  <button className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                    disabled={safePage === 0} onClick={() => setCurrentPage(safePage - 1)}>
+                    ← Prev
+                  </button>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0 0.5rem' }}>
+                    Page {safePage + 1} of {totalPages.toLocaleString()}
+                  </span>
+                  <button className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                    disabled={safePage >= totalPages - 1} onClick={() => setCurrentPage(safePage + 1)}>
+                    Next →
+                  </button>
+                  <button className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                    disabled={safePage >= totalPages - 1} onClick={() => setCurrentPage(totalPages - 1)}>
+                    Last
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
-
