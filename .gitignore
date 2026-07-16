@@ -33,3 +33,30 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Database files (binary, do not commit)
+*.accdb
+*.mdb
+*.ldb
+
+# Data files (large, generated)
+*.parquet
+*.feather
+*.arrow
+*.rds
+*.RData
+*.Rhistory
+
+# Python bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Logs
+logs/
+*.log

@@ -133,10 +133,10 @@ export function Analysis({ processedData }: AnalysisProps) {
 
   // Hub View
   return (
-    <div className="container" style={{ animation: 'fadeIn 0.4s ease-out' }}>
-      <div style={{ marginBottom: '2.5rem' }}>
-        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>Analysis Hub</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>Select a module below to perform actuarial calculations and analysis.</p>
+    <div className="container" style={{ animation: 'fadeIn 0.4s ease-out', paddingTop: '1.75rem' }}>
+      <div style={{ marginBottom: '2rem' }}>
+        <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem', fontWeight: 600 }}>Analysis Hub</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Select a module below to perform actuarial calculations and analysis.</p>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem' }}>
