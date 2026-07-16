@@ -85,10 +85,44 @@ const DERIVED_SHEET_GROUPS = [
   ['CF_T1_PVFC_LIC_TEXPVAR_PY', 'CF_T1_PVFC_LIC_TASSCHG_PY', 'CF_T1_PVFC_LIC_FASSCHG_PY', 'CF_T1_PVFC_LIC_FEXPVAR_PY']
 ];
 
+const INDIVIDUAL_LIFE_SHEETS = [
+  'MP_GOC', 'MP_GOC_SEG', 'ACTUARIAL_AOM_IMPACT', 'INITIALIZATION', 'CURVE_ID_PARAM',
+  'OCI_OPTION_DERECOG', 'MANDATORY_ACTUALS', 'ACTUALS_FOR_VISUALIZATION', 'COVERAGE_UNIT',
+  'CF_T1_PVFC_LRC_OP', 'CF_T1_PVFC_LRC_OP_TADJ', 'CF_T1_PVFC_LRC_OP_FADJ',
+  'CF_T1_PVFC_LRC_NB_POS', 'CF_T1_PVFC_LRC_EXPCLOIF', 'CF_T1_PVFC_LRC_EXPCLONB',
+  'CF_T1_PVFC_LRC_DEREC', 'CF_T1_PVFC_LRC_CLO_TADJ', 'CF_T1_PVFC_LRC_CLO_FADJ',
+  'CF_T1_PVFC_LRC_TEXPVAR', 'CF_T1_PVFC_LRC_FEXPVAR', 'CF_T1_PVFC_LRC_TASSCHG',
+  'CF_T1_PVFC_LRC_FASSCHG', 'CF_T1_PVFC_LRC_CLO', 'CF_T1_PVFC_LIC_OP',
+  'CF_T1_PVFC_LIC_OP_TADJ_PY', 'CF_T1_PVFC_LIC_OP_FADJ_PY', 'CF_T1_PVFC_LIC_EXPCLO_PY',
+  'CF_T1_PVFC_LIC_DEREC', 'CF_T1_PVFC_LIC_CLO_TADJ_PY', 'CF_T1_PVFC_LIC_CLO_FADJ_PY',
+  'CF_T1_PVFC_LIC_TEXPVAR_PY', 'CF_T1_PVFC_LIC_FEXPVAR_PY', 'CF_T1_PVFC_LIC_TASSCHG_PY',
+  'CF_T1_PVFC_LIC_FASSCHG_PY', 'CF_T1_PVFC_LIC_INCLAIM_LIC_INCR',
+  'CF_T1_PVFC_LIC_INCEXP_LIC_INCR', 'CF_T1_PVFC_LIC_CLO', 'CF_T1_ACQ_CF_LRC_OP_TADJ',
+  'CF_T1_ACQ_CF_LRC_OP_FADJ', 'CF_T1_ACQ_CF_LRC_OP', 'CF_T1_ACQ_CF_LRC_NB',
+  'CF_T1_ACQ_CF_LRC_EXPCLOIF', 'CF_T1_ACQ_CF_LRC_TEXPVAR', 'CF_T1_ACQ_CF_LRC_EXPCLONB',
+  'CF_T1_ACQ_CF_LRC_DEREC', 'CF_T1_ACQ_CF_LRC_TASSCHG', 'CF_T1_ACQ_CF_LRC_FASSCHG',
+  'CF_T1_ACQ_CF_LRC_CLO'
+];
+
+const INDIVIDUAL_LIFE_DERIVED_GROUPS = [];
+
 const OUTPUT_SHEETS = [
   ...GROUP1_SHEETS,
   ...DERIVED_SHEET_GROUPS.flatMap(([_, ...derivedSheets]) => derivedSheets)
 ];
+
+function getSheetConfigForPortfolio(portfolioId) {
+  if (portfolioId === 'individual-life') {
+    return {
+      primarySheets: INDIVIDUAL_LIFE_SHEETS,
+      derivedGroups: INDIVIDUAL_LIFE_DERIVED_GROUPS
+    };
+  }
+  return {
+    primarySheets: GROUP1_SHEETS,
+    derivedGroups: DERIVED_SHEET_GROUPS
+  };
+}
 
 const upload = multer({
   dest: os.tmpdir(),
@@ -331,7 +365,7 @@ function loadStagedUpload(req, res, next) {
   return next();
 }
 
-async function buildZipFile(zipPath, sourceSheets, separateRi) {
+async function buildZipFile(zipPath, sourceSheets, separateRi, derivedGroups) {
   const zip = new JSZip();
 
   for (const [sheetKey, state] of sourceSheets.entries()) {
@@ -346,7 +380,7 @@ async function buildZipFile(zipPath, sourceSheets, separateRi) {
     zip.file(outPath, fs.createReadStream(state.csvPath));
   }
 
-  for (const [sourceSheet, ...derivedSheets] of DERIVED_SHEET_GROUPS) {
+  for (const [sourceSheet, ...derivedSheets] of derivedGroups) {
     const prefixes = separateRi ? ['Gross_', 'RI_'] : [''];
     for (const prefix of prefixes) {
       const sourceKey = `${prefix}${sourceSheet}`;
@@ -376,7 +410,7 @@ async function buildZipFile(zipPath, sourceSheets, separateRi) {
   });
 }
 
-function extractWorkbookInWorker(file, workingDir, separateRi) {
+function extractWorkbookInWorker(file, workingDir, separateRi, sheetNames) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const worker = new Worker(path.join(__dirname, 'consolidationWorker.js'), {
@@ -385,7 +419,7 @@ function extractWorkbookInWorker(file, workingDir, separateRi) {
         fieldName: file.fieldname,
         workingDir,
         separateRi,
-        sheetNames: GROUP1_SHEETS
+        sheetNames
       },
       execArgv: [],
       resourceLimits: {
@@ -438,11 +472,14 @@ async function processJob(job, files) {
       return sourceSheets.get(key);
     };
 
+    const { primarySheets, derivedGroups } = getSheetConfigForPortfolio(job.portfolioId);
+    const totalSheetTarget = primarySheets.length + derivedGroups.flat().length - derivedGroups.length;
+
     if (job.separateRi) {
-      GROUP1_SHEETS.forEach(s => addSheetState('Gross', s));
-      GROUP1_SHEETS.forEach(s => addSheetState('RI', s));
+      primarySheets.forEach(s => addSheetState('Gross', s));
+      primarySheets.forEach(s => addSheetState('RI', s));
     } else {
-      GROUP1_SHEETS.forEach(s => addSheetState('', s));
+      primarySheets.forEach(s => addSheetState('', s));
     }
     const skippedFiles = [];
     let processedFileCount = 0;
@@ -452,7 +489,7 @@ async function processJob(job, files) {
         updateJob(job, `Reading workbook ${fileIndex + 1}/${files.length}: ${file.originalname}`, Math.min(30, Math.round(((fileIndex + 1) / files.length) * 30)));
         appendJobLog(job, `Reading workbook ${fileIndex + 1}/${files.length}: ${file.originalname}`);
 
-        const contributedSheets = await extractWorkbookInWorker(file, workingDir, job.separateRi);
+        const contributedSheets = await extractWorkbookInWorker(file, workingDir, job.separateRi, primarySheets);
 
         processedFileCount += 1;
         job.processedFileCount = processedFileCount;
@@ -479,7 +516,7 @@ async function processJob(job, files) {
 
     for (const [sheetKey, state] of sourceSheets.entries()) {
       completedOutputSheets += 1;
-      const targetCount = job.separateRi ? OUTPUT_SHEETS.length * 2 : OUTPUT_SHEETS.length;
+      const targetCount = job.separateRi ? totalSheetTarget * 2 : totalSheetTarget;
       updateJob(job, `Processing sheet ${completedOutputSheets}/${targetCount}: ${sheetKey}`, 30 + Math.round((completedOutputSheets / targetCount) * 45));
       appendJobLog(job, `Processing sheet ${completedOutputSheets}/${targetCount}: ${sheetKey}`);
 
@@ -492,7 +529,7 @@ async function processJob(job, files) {
       totalRows += summary.rowCount;
     }
 
-    for (const [sourceSheet, ...derivedSheets] of DERIVED_SHEET_GROUPS) {
+    for (const [sourceSheet, ...derivedSheets] of derivedGroups) {
       const prefixes = job.separateRi ? ['Gross_', 'RI_'] : [''];
       for (const prefix of prefixes) {
         const sourceKey = `${prefix}${sourceSheet}`;
@@ -501,7 +538,7 @@ async function processJob(job, files) {
         for (const sheetName of derivedSheets) {
           const destKey = `${prefix}${sheetName}`;
           completedOutputSheets += 1;
-          const targetCount = job.separateRi ? OUTPUT_SHEETS.length * 2 : OUTPUT_SHEETS.length;
+          const targetCount = job.separateRi ? totalSheetTarget * 2 : totalSheetTarget;
           updateJob(job, `Processing sheet ${completedOutputSheets}/${targetCount}: ${sheetName}`, 30 + Math.round((completedOutputSheets / targetCount) * 45));
           appendJobLog(job, `Processing sheet ${completedOutputSheets}/${targetCount}: ${destKey}`);
 
@@ -525,7 +562,7 @@ async function processJob(job, files) {
     appendJobLog(job, 'Building compressed ZIP package...');
 
     const zipPath = path.join(workingDir, 'processed_sheets.zip');
-    await buildZipFile(zipPath, sourceSheets, job.separateRi);
+    await buildZipFile(zipPath, sourceSheets, job.separateRi, derivedGroups);
 
     job.zipPath = zipPath;
     job.summary = summary;
@@ -689,6 +726,7 @@ app.post('/api/process/uploads', (req, res) => {
     expectedFileCount,
     files: [],
     separateRi: req.body?.separateRi === true,
+    portfolioId: req.body?.portfolioId || '',
     modelInput: req.body?.modelInput || null,
     reserveData: req.body?.reserveData || null,
     grossMatches: req.body?.grossMatches || null,
@@ -744,8 +782,7 @@ app.post(
   }
 );
 
-app.post(
-  '/api/process/uploads/:uploadId/start',
+app.  post('/api/process/uploads/:uploadId/start',
   loadStagedUpload,
   (req, res) => {
     const stagedUpload = req.stagedUpload;
@@ -760,6 +797,7 @@ app.post(
 
     const job = createJob(stagedUpload.files.length);
     job.separateRi = stagedUpload.separateRi;
+    job.portfolioId = stagedUpload.portfolioId || '';
     job.modelInput = stagedUpload.modelInput;
     job.reserveData = stagedUpload.reserveData;
     job.grossMatches = stagedUpload.grossMatches;
@@ -806,6 +844,7 @@ app.post('/api/process', upload.any(), (req, res) => {
 
   const job = createJob(files.length);
   job.separateRi = req.body.separateRi === 'true';
+  job.portfolioId = req.body.portfolioId || '';
 
   if (req.body.modelInput) {
     job.modelInput = JSON.parse(req.body.modelInput);

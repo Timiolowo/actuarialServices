@@ -60,3 +60,7 @@ venv/
 # Logs
 logs/
 *.log
+
+# Allow template files for the earned premium calculator
+!frontend/public/templates/
+!frontend/public/templates/*.xlsx

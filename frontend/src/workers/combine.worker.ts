@@ -3,10 +3,7 @@
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import {
-  GROUP1_SHEETS,
-  GROUP2_SHEETS,
-  GROUP3_SHEETS,
-  GROUP4_SHEETS
+  getSheetConfig
 } from '../utils/processor';
 import type { ProcessingSummary, SheetProcessingSummary } from '../utils/processor';
 
@@ -21,6 +18,7 @@ interface StartMessage {
   type: 'start';
   files: LocalWorkbook[];
   separateRi: boolean;
+  portfolioId?: string;
 }
 
 interface SheetState {
@@ -30,7 +28,6 @@ interface SheetState {
   sourceFileCount: number;
 }
 
-const derivedSheetGroups = [GROUP2_SHEETS, GROUP3_SHEETS, GROUP4_SHEETS];
 const textEncoder = new TextEncoder();
 
 function postProgress(status: string, progressPercent: number, log?: string, logType: 'info' | 'success' | 'error' = 'info') {
@@ -131,11 +128,12 @@ async function extractWorkbook(
   item: LocalWorkbook,
   states: Map<string, SheetState>,
   writers: Map<string, FileSystemWritableFileStream>,
-  separateRi: boolean
+  separateRi: boolean,
+  primarySheets: string[]
 ) {
   const workbook = XLSX.read(await item.file.arrayBuffer(), {
     type: 'array',
-    sheets: GROUP1_SHEETS,
+    sheets: primarySheets,
     cellHTML: false,
     cellFormula: false,
     cellNF: false,
@@ -146,7 +144,7 @@ async function extractWorkbook(
     ? (item.fieldName === 'reinsuranceFiles' ? 'RI' : 'Gross')
     : '';
 
-  for (const sheetName of GROUP1_SHEETS) {
+  for (const sheetName of primarySheets) {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
     const key = prefix ? `${prefix}_${sheetName}` : sheetName;
@@ -249,10 +247,12 @@ function outputPath(sheetKey: string, separateRi: boolean) {
   return `RI/${sheetKey.slice('RI_'.length)}.csv`;
 }
 
-async function run({ files, separateRi }: StartMessage) {
+async function run({ files, separateRi, portfolioId }: StartMessage) {
   if (!navigator.storage?.getDirectory) {
     throw new Error('This browser cannot create the temporary local workspace required for workbook processing.');
   }
+
+  const { primarySheets, derivedGroups } = getSheetConfig(portfolioId || '');
 
   const root = await navigator.storage.getDirectory();
   const workspaceName = `actuarial-combine-${crypto.randomUUID()}`;
@@ -264,7 +264,7 @@ async function run({ files, separateRi }: StartMessage) {
     const writers = new Map<string, FileSystemWritableFileStream>();
 
     for (const prefix of prefixes) {
-      for (const sheetName of GROUP1_SHEETS) {
+      for (const sheetName of primarySheets) {
         const key = prefix ? `${prefix}_${sheetName}` : sheetName;
         const rawHandle = await workspace.getFileHandle(`${key}.jsonl`, { create: true });
         const csvHandle = await workspace.getFileHandle(`${key}.csv`, { create: true });
@@ -281,7 +281,7 @@ async function run({ files, separateRi }: StartMessage) {
       const status = `Reading workbook ${fileNumber}/${files.length}: ${item.file.name}`;
       postProgress(status, 5 + Math.round((fileNumber / files.length) * 45), status);
       try {
-        await extractWorkbook(item, states, writers, separateRi);
+        await extractWorkbook(item, states, writers, separateRi, primarySheets);
         processedFileCount += 1;
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'Could not read workbook';
@@ -306,7 +306,7 @@ async function run({ files, separateRi }: StartMessage) {
       totalRows += sheets[key].rowCount;
     }
 
-    for (const group of derivedSheetGroups) {
+    for (const group of derivedGroups) {
       const [sourceSheet, ...derivedSheets] = group;
       for (const prefix of separateRi ? ['Gross_', 'RI_'] : ['']) {
         const sourceKey = `${prefix}${sourceSheet}`;
@@ -329,7 +329,7 @@ async function run({ files, separateRi }: StartMessage) {
       zip.file(outputPath(key, separateRi), csvFile);
     }
 
-    for (const group of derivedSheetGroups) {
+    for (const group of derivedGroups) {
       const [sourceSheet, ...derivedSheets] = group;
       for (const prefix of separateRi ? ['Gross_', 'RI_'] : ['']) {
         const sourceKey = `${prefix}${sourceSheet}`;

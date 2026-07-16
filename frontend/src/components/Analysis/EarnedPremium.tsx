@@ -61,7 +61,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     setResultBlob(null);
 
     try {
-      const templateRes = await fetch('/templates/Earned Premium Template.xlsx');
+      const templateRes = await fetch('https://raw.githubusercontent.com/Timiolowo/actuarialServices/main/frontend/public/templates/Earned%20Premium%20Template.xlsx');
       if (!templateRes.ok) throw new Error('Could not load Excel template from server.');
       const templateBuffer = await templateRes.arrayBuffer();
 

@@ -28,6 +28,7 @@ type LocalWorkerMessage = LocalProgressMessage | LocalCompleteMessage | LocalErr
 function processCombineLocally(
   files: { file: File; fieldName: 'lobFiles' | 'reinsuranceFiles' }[],
   separateRi: boolean,
+  portfolioId: string,
   onProgress: (message: LocalProgressMessage) => void
 ) {
   return new Promise<{ zipBlob: Blob; summary: ProcessingSummary }>((resolve, reject) => {
@@ -51,7 +52,7 @@ function processCombineLocally(
       reject(new Error(event.message || 'The local workbook processor stopped unexpectedly.'));
     };
 
-    worker.postMessage({ type: 'start', files, separateRi });
+    worker.postMessage({ type: 'start', files, separateRi, portfolioId });
   });
 }
 
@@ -195,7 +196,7 @@ export function useActuarialProcessor() {
         setProgressPercent(3);
         setCurrentStatus('Preparing local workbook processing...');
         addLog(`Processing ${formatFileSize(totalSize)} locally. Workbooks will not be uploaded.`, 'success');
-        const result = await processCombineLocally(processingFiles, separateRi, message => {
+        const result = await processCombineLocally(processingFiles, separateRi, portfolioId, message => {
           setCurrentStatus(message.status);
           setProgressPercent(message.progressPercent);
           if (message.log) addLog(message.log, message.logType || 'info');
