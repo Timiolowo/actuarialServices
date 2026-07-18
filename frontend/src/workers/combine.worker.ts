@@ -87,6 +87,18 @@ async function extractSheet(
     headers[column] = String(cell?.v ?? '').trim();
   }
 
+  // Write header-order metadata so analyzeRawSheet preserves the original
+  // Excel column order.  JSON.stringify + JSON.parse reorders numeric-like
+  // keys ("0","1",…) before string keys ("GOC_ID","VARIABLE_NAME","PV"),
+  // which breaks the expected column arrangement.
+  let orderedHeaders = headers.filter(h => h);
+  if (sheetName === 'ACTUARIAL_AOM_IMPACT') {
+    orderedHeaders = orderedHeaders.filter(h => h !== '* MACRO_STEP_ID_DESCRIPTION');
+  }
+  await writable.write(textEncoder.encode(
+    `${JSON.stringify({ __headerOrder__: orderedHeaders })}\n`
+  ));
+
   const chunks: string[] = [];
   let bufferedLength = 0;
   let contributedRows = false;
@@ -158,17 +170,26 @@ async function extractWorkbook(
 }
 
 async function analyzeRawSheet(file: File) {
-  const headers: string[] = [];
+  let canonicalHeaders: string[] | null = null;
   const headerSet = new Set<string>();
   const stats = new Map<string, { populatedCount: number; numericCount: number }>();
 
   for await (const line of readLines(file)) {
     if (!line) continue;
     const row = JSON.parse(line) as Record<string, unknown>;
+
+    // Read header-order metadata written by extractSheet.
+    if (Array.isArray(row.__headerOrder__)) {
+      if (!canonicalHeaders) {
+        canonicalHeaders = row.__headerOrder__ as string[];
+        for (const h of canonicalHeaders) headerSet.add(h);
+      }
+      continue;
+    }
+
     for (const [header, value] of Object.entries(row)) {
       if (!headerSet.has(header)) {
         headerSet.add(header);
-        headers.push(header);
       }
       const headerStats = stats.get(header) || { populatedCount: 0, numericCount: 0 };
       if (value !== '' && value !== null && value !== undefined) {
@@ -178,6 +199,12 @@ async function analyzeRawSheet(file: File) {
       stats.set(header, headerStats);
     }
   }
+
+  // Use canonical order from the Excel sheet, appending any extra headers
+  // that appeared in later workbooks but not in the first.
+  const headers = canonicalHeaders
+    ? [...canonicalHeaders, ...Array.from(headerSet).filter(h => !canonicalHeaders!.includes(h))]
+    : Array.from(headerSet);
 
   const numericHeaders = new Set<string>();
   headers.forEach((header, index) => {
@@ -210,6 +237,7 @@ async function materializeCsv(state: SheetState): Promise<SheetProcessingSummary
   for await (const line of readLines(rawFile)) {
     if (!line) continue;
     const row = JSON.parse(line) as Record<string, unknown>;
+    if (Array.isArray(row.__headerOrder__)) continue;
     rowCount += 1;
     const cells = headers.map(header => {
       let value = row[header];

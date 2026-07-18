@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test:workers": "node local-worker-test.mjs && node local-transfer-worker-test.mjs",
+    "test:workers": "node local-worker-test.mjs && node local-transfer-worker-test.mjs && node --experimental-strip-types earned-premium-worker-test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

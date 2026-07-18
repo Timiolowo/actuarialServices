@@ -5,6 +5,15 @@ interface EarnedPremiumProps {
   onBack: () => void;
 }
 
+interface ProcessingAudit {
+  totalRows: number;
+  calculatedRows: number;
+  reviewRows: number;
+  previewRows: number;
+  previewLimit: number;
+  reasons: Record<string, number>;
+}
+
 type ViewTab = 'summary' | 'detail';
 
 const DETAIL_COLUMNS = [
@@ -57,6 +66,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [summaryData, setSummaryData] = useState<any[]>([]);
   const [detailRows, setDetailRows] = useState<any[]>([]);
+  const [audit, setAudit] = useState<ProcessingAudit | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
   // View state
@@ -101,10 +111,11 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     setStatusMsg('Loading template...');
     setErrorMsg('');
     setResultBlob(null);
+    setAudit(null);
 
     try {
-      const templateRes = await fetch('https://raw.githubusercontent.com/Timiolowo/actuarialServices/main/frontend/public/templates/Earned%20Premium%20Data.xlsx');
-      if (!templateRes.ok) throw new Error('Could not load Excel template from server.');
+      const templateRes = await fetch('/templates/Earned%20Premium%20Data.xlsx');
+      if (!templateRes.ok) throw new Error('Could not load the local Excel template.');
       const templateBuffer = await templateRes.arrayBuffer();
 
       workerRef.current = new EpWorker();
@@ -119,6 +130,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           setResultBlob(data.blob);
           if (data.summary) setSummaryData(data.summary);
           if (data.detailRows) setDetailRows(data.detailRows);
+          if (data.audit) setAudit(data.audit);
           setCurrentPage(0);
           setSearchQuery('');
           setColumnFilters({});
@@ -137,7 +149,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
         valStartStr: valStart,
         valEndStr: valEnd,
         templateBuffer
-      });
+      }, [templateBuffer]);
     } catch (err: any) {
       setIsProcessing(false);
       setErrorMsg(err.message || 'An error occurred');
@@ -220,49 +232,71 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
       )}
 
       {isProcessing ? (
-        <div className="glass-panel status-panel" style={{ padding: '4rem 2rem', textAlign: 'center', animation: 'fadeIn 0.3s ease-out' }}>
-          <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: '64px', height: '64px' }}>
-              <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="64" height="64" style={{ color: 'var(--primary)' }}>
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" style={{ opacity: 0.15 }}></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text)' }}>
-                {Math.round(progress)}%
-              </div>
-            </div>
+        <div className="glass-panel" style={{ padding: '5rem 2rem', textAlign: 'center', animation: 'fadeIn 0.3s ease-out' }}>
+          <style>{`
+            @keyframes slideUpFade {
+              0% { transform: translateY(10px); opacity: 0; }
+              100% { transform: translateY(0); opacity: 1; }
+            }
+          `}</style>
+          <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'center' }}>
+            <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="48" height="48" style={{ color: 'var(--primary)' }}>
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" style={{ opacity: 0.25 }}></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
           </div>
-          <h2 style={{ marginBottom: '0.5rem', fontSize: '1.5rem', fontWeight: 600 }}>{statusMsg || 'Calculating...'}</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '400px', margin: '0 auto' }}>Applying actuarial methodologies to massive datasets locally without uploading to a server.</p>
-          <div className="progress-bar-container" style={{ height: '6px', margin: '2rem auto 0 auto', maxWidth: '400px' }}>
-            <div className="progress-bar-fill" style={{ width: `${progress}%`, height: '100%', background: 'var(--primary)', borderRadius: '9999px', transition: 'width 0.25s ease-out' }}></div>
+          <h2 style={{ marginBottom: '0.5rem', fontSize: '1.5rem' }}>Calculating Earned Premium...</h2>
+          
+          <div style={{ height: '24px', overflow: 'hidden', position: 'relative', margin: '0.5rem 0' }}>
+            <p 
+              key={statusMsg} 
+              style={{ 
+                margin: 0,
+                color: 'var(--text-muted)', 
+                animation: 'slideUpFade 0.3s ease-out forwards',
+                position: 'absolute',
+                width: '100%',
+                textAlign: 'center'
+              }}
+            >
+              {statusMsg || 'Applying actuarial methodologies...'}
+            </p>
+          </div>
+
+          <div style={{ marginTop: '1.5rem', fontFamily: 'monospace', fontSize: '1.5rem', color: 'var(--primary)', fontWeight: 'bold' }}>
+            {Math.round(progress)}%
+          </div>
+          <div style={{ width: '100%', maxWidth: '300px', height: '4px', background: 'var(--border)', margin: '0.5rem auto 0 auto', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{ width: `${progress}%`, height: '100%', background: 'var(--primary)', transition: 'width 0.15s linear' }} />
           </div>
         </div>
       ) : !hasResults ? (
         <>
           <div className="glass-panel" style={{ padding: '2.5rem' }}>
             {/* Parameters Section */}
-            <div style={{ marginBottom: '3rem' }}>
-              <h3 style={{ fontSize: '1.1rem', marginBottom: '1.5rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="var(--primary)" width="20" height="20">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
-                </svg>
-                Valuation Parameters
-              </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem', background: 'rgba(255,255,255,0.02)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>Valuation Start Date</label>
-                  <input type="date" value={valStart} onChange={e => setValStart(e.target.value)}
-                    style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontFamily: 'inherit', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s' }}
-                    onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
-                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>Valuation End Date</label>
-                  <input type="date" value={valEnd} onChange={e => setValEnd(e.target.value)}
-                    style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontFamily: 'inherit', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s' }}
-                    onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
-                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
+            <div style={{ marginBottom: '2rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', background: 'rgba(255,255,255,0.02)', padding: '1rem 1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                <h3 style={{ fontSize: '1.1rem', margin: 0, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="var(--primary)" width="20" height="20">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+                  </svg>
+                  Valuation Parameters
+                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <label style={{ fontSize: '0.75rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Start</label>
+                    <input type="date" value={valStart} onChange={e => setValStart(e.target.value)}
+                      style={{ padding: '0.4rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontFamily: 'inherit', fontSize: '0.85rem', outline: 'none', transition: 'border-color 0.2s' }}
+                      onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
+                      onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <label style={{ fontSize: '0.75rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>End</label>
+                    <input type="date" value={valEnd} onChange={e => setValEnd(e.target.value)}
+                      style={{ padding: '0.4rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontFamily: 'inherit', fontSize: '0.85rem', outline: 'none', transition: 'border-color 0.2s' }}
+                      onFocus={(e) => e.target.style.borderColor = 'var(--primary)'}
+                      onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -333,7 +367,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
             </div>
             <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem', fontWeight: 600 }}>Calculation Complete!</h2>
             <p style={{ color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto 1.5rem auto', lineHeight: 1.6 }}>
-              {detailRows.length.toLocaleString()} rows processed. Your summary and detailed sheets have been injected into the Earned Premium Template.
+              {(audit?.calculatedRows ?? detailRows.length).toLocaleString()} rows calculated. Your downloaded workbook contains every calculated row and a Review sheet for rows that need attention.
             </p>
             <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
               <button className="btn-secondary" onClick={() => { setFile(null); setHasResults(false); }}>Start Over</button>
@@ -345,6 +379,25 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
               </button>
             </div>
           </div>
+
+          {audit && (
+            <div className="glass-panel" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1rem', margin: '0 0 1rem 0', color: 'var(--text)' }}>Processing audit</h3>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: audit.reviewRows ? '1rem' : 0 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Input: <strong style={{ color: 'var(--text)' }}>{audit.totalRows.toLocaleString()}</strong></span>
+                <span style={{ color: 'var(--text-muted)' }}>Calculated: <strong style={{ color: '#22c55e' }}>{audit.calculatedRows.toLocaleString()}</strong></span>
+                <span style={{ color: 'var(--text-muted)' }}>Review: <strong style={{ color: audit.reviewRows ? '#f59e0b' : 'var(--text)' }}>{audit.reviewRows.toLocaleString()}</strong></span>
+              </div>
+              {audit.reviewRows > 0 && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.7 }}>
+                  {Object.entries(audit.reasons).map(([reason, count]) => (
+                    <div key={reason}>{reason}: <strong style={{ color: 'var(--text)' }}>{count.toLocaleString()}</strong></div>
+                  ))}
+                  <div style={{ marginTop: '0.5rem' }}>All reviewed rows are listed in the downloaded workbook’s <strong style={{ color: 'var(--text)' }}>Review</strong> sheet.</div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Tab Navigation */}
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
@@ -368,7 +421,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                 fontWeight: activeTab === 'detail' ? 700 : 400,
                 transition: 'all 0.2s'
               }}>
-              Detail ({detailRows.length.toLocaleString()})
+              Detail preview ({detailRows.length.toLocaleString()})
             </button>
           </div>
 
@@ -416,6 +469,11 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           {/* Detail Tab */}
           {activeTab === 'detail' && (
             <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
+              {audit && audit.calculatedRows > audit.previewRows && (
+                <p style={{ margin: '0 0 1rem 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  Showing the first {audit.previewRows.toLocaleString()} calculated rows to keep browser memory low. The workbook contains all {audit.calculatedRows.toLocaleString()} calculated rows.
+                </p>
+              )}
               {/* Search + Filter bar */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem', alignItems: 'center' }}>
                 <div style={{ position: 'relative', flex: '1 1 280px', minWidth: '200px' }}>

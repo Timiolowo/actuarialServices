@@ -32,16 +32,20 @@ export function RevisedComposite({ onBack }: RevisedCompositeProps) {
   };
 
   return (
-    <div className="container" style={{ animation: 'fadeIn 0.4s ease-out' }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2rem' }}>
-        <button className="btn-secondary" onClick={onBack} style={{ marginRight: '1.5rem', padding: '0.5rem 1rem' }}>
-          ← Back to Hub
+    <div className="container" style={{ animation: 'fadeIn 0.4s ease-out', paddingTop: '1.75rem' }}>
+      {/* Breadcrumb */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '2rem' }}>
+        <button className="btn-secondary" onClick={onBack} style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="14" height="14"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
+          Analysis Hub
         </button>
-        <div>
-          <h1 style={{ fontSize: '2rem', margin: 0 }}>Revised Composite Sheet</h1>
-          <p style={{ color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>Generate a revised composite sheet from base data</p>
-        </div>
+        <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>/</span>
+        <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text)' }}>Revised Composite Sheet</span>
       </div>
+
+      <p style={{ fontFamily: 'monospace', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--text-muted)', marginBottom: '2rem', lineHeight: '1.6' }}>
+        Generate a revised composite sheet from base data
+      </p>
 
       {isProcessing ? (
         <div className="glass-panel" style={{ padding: '5rem 2rem', textAlign: 'center', animation: 'fadeIn 0.3s ease-out' }}>

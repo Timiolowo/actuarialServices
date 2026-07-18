@@ -181,8 +181,8 @@ function App() {
           </Routes>
         </main>
 
-        {/* Global Footer */}
-        <Footer />
+        {/* Footer — landing page only */}
+        {!activePortfolioId && <Footer />}
       </div>
     </div>
   );

@@ -14,10 +14,21 @@ export interface EpWorkerMessage {
   blob?: Blob;
   summary?: any[];
   detailRows?: any[];
+  audit?: ProcessingAudit;
   message?: string;
 }
 
+interface ProcessingAudit {
+  totalRows: number;
+  calculatedRows: number;
+  reviewRows: number;
+  previewRows: number;
+  previewLimit: number;
+  reasons: Record<string, number>;
+}
+
 const msPerDay = 1000 * 60 * 60 * 24;
+const previewLimit = 1000;
 
 function parseDate(d: any): Date | null {
   if (!d) return null;
@@ -31,12 +42,17 @@ function parseDate(d: any): Date | null {
 }
 
 function getEndDate(policyClass: string, startdate: Date | null, enddate: Date | null): Date | null {
-  if (policyClass === "Marine Cargo") {
+  if (policyClass === 'MARINE CARGO') {
     if (!enddate && startdate) {
-      const d = new Date(startdate);
-      d.setUTCMonth(d.getUTCMonth() + 6);
-      d.setUTCDate(d.getUTCDate() - 1);
-      return d;
+      const targetMonth = startdate.getUTCMonth() + 6;
+      const monthEnd = new Date(Date.UTC(startdate.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
+      const sixMonthsLater = new Date(Date.UTC(
+        startdate.getUTCFullYear(),
+        targetMonth,
+        Math.min(startdate.getUTCDate(), monthEnd)
+      ));
+      sixMonthsLater.setUTCDate(sixMonthsLater.getUTCDate() - 1);
+      return sixMonthsLater;
     }
   }
   return enddate;
@@ -47,7 +63,7 @@ function getDateToUse(startdate: Date, enddate: Date, valstart: Date): Date | nu
   return valstart > startdate ? valstart : startdate;
 }
 
-function useDuration(startdate: Date, enddate: Date, regDate: Date, valStart: Date, dateToUse: Date | null): number {
+function calculateDuration(startdate: Date, enddate: Date, regDate: Date, valStart: Date, dateToUse: Date | null): number {
   let rtn = startdate;
   if (regDate.getUTCFullYear() === valStart.getUTCFullYear() && regDate.getUTCFullYear() > startdate.getUTCFullYear()) {
     if (dateToUse) rtn = dateToUse;
@@ -110,6 +126,28 @@ function fixVal(v: any): number {
   return (isNaN(n) || !isFinite(n)) ? 0 : n;
 }
 
+function normalizeHeader(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function buildColumnMap(row: Record<string, any>): Map<string, string> {
+  return new Map(Object.keys(row).map(key => [normalizeHeader(key), key]));
+}
+
+function firstValue(row: Record<string, any>, columns: Map<string, string>, aliases: string[]): any {
+  for (const alias of aliases) {
+    const key = columns.get(alias);
+    if (key !== undefined) return row[key];
+  }
+  return undefined;
+}
+
+function finiteNumber(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function postProgress(status: string, progressPercent: number) {
   self.postMessage({ type: 'progress', status, progressPercent });
 }
@@ -119,6 +157,9 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
 
   const valStart = parseDate(valStartStr)!;
   const valEnd = parseDate(valEndStr)!;
+  if (!valStart || !valEnd || valStart > valEnd) {
+    throw new Error('Valuation start date must be on or before the valuation end date.');
+  }
 
   let rows: any[] = [];
 
@@ -155,11 +196,11 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
     rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { raw: true });
   }
 
+  let columns: Map<string, string>;
   if (rows.length > 0) {
+    columns = buildColumnMap(rows[0]);
     const requiredCols = ['REGISTRATN_DT', 'START_DATE', 'END_DATE', 'CLASS', 'PREMIUM', 'COMM'];
-    const extractedCols = Object.keys(rows[0]);
-    const lowerExtractedCols = extractedCols.map(c => c.toLowerCase());
-    const missingCols = requiredCols.filter(req => !lowerExtractedCols.includes(req.toLowerCase()));
+    const missingCols = requiredCols.filter(column => !columns.has(column));
     if (missingCols.length > 0) {
       throw new Error(`Missing required columns: ${missingCols.join(', ')}`);
     }
@@ -169,12 +210,17 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
 
   postProgress('Applying Actuarial Calculations...', 40);
 
-  // Filter: year(REGISTRATN_DT) <= year(valend)
-  const filtered = rows.filter(r => {
-    const reg = parseDate(r.REGISTRATN_DT || r.registratn_dt);
-    if (!reg) return false;
-    return reg.getUTCFullYear() <= valEnd.getUTCFullYear();
-  });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(templateBuffer);
+  const calcSheet = wb.getWorksheet('Calculation');
+  if (!calcSheet) throw new Error('The local template is missing the Calculation sheet.');
+  calcSheet.getCell('E1').value = new Date(`${valStartStr}T00:00:00Z`);
+  calcSheet.getCell('E1').numFmt = 'DD/MM/YYYY';
+  calcSheet.getCell('H1').value = new Date(`${valEndStr}T00:00:00Z`);
+  calcSheet.getCell('H1').numFmt = 'DD/MM/YYYY';
+
+  const reviewSheet = wb.getWorksheet('Review') || wb.addWorksheet('Review');
+  reviewSheet.addRow(['SOURCE ROW', 'POLICY KEY', 'CUSTOMER NAME', 'CLASS', 'REGISTRATION DATE', 'START DATE', 'END DATE', 'PREMIUM', 'REASON']);
 
   const summaryMap = new Map<string, {
     earnedPremium: number;
@@ -185,31 +231,78 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
   }>();
 
   const detailRows: any[] = [];
+  const audit: ProcessingAudit = {
+    totalRows: rows.length,
+    calculatedRows: 0,
+    reviewRows: 0,
+    previewRows: 0,
+    previewLimit,
+    reasons: {}
+  };
+  let calculationRow = 3;
 
-  for (let i = 0; i < filtered.length; i++) {
+  const sendToReview = (sourceRow: number, values: any[], reason: string) => {
+    audit.reviewRows++;
+    audit.reasons[reason] = (audit.reasons[reason] || 0) + 1;
+    reviewSheet.addRow([sourceRow, ...values, reason]);
+  };
+
+  for (let i = 0; i < rows.length; i++) {
     if (i % 5000 === 0) {
-      postProgress(`Processing row ${i} / ${filtered.length}`, 40 + (i / filtered.length) * 30);
+      postProgress(`Processing row ${i} / ${rows.length}`, 40 + (i / rows.length) * 30);
     }
-    const r = filtered[i];
+    const r = rows[i];
+    rows[i] = null;
 
-    // Normalize keys
-    const policyKey = r.POLICYKEY || r.policykey || r.POLICY_KEY || '';
-    const custName = r.CUSTOMER_NAME || r.customer_name || r.CUST_NAME || r['CUST NAME'] || '';
-    const policyClass = (r.CLASS || r.class || '').toString().toUpperCase();
-    const premium = fixVal(r.PREMIUM || r.premium || r['GROSS PREMIUM']);
-    const comm = fixVal(r.COMM || r.comm || r.COMMISSION);
+    const policyKey = firstValue(r, columns, ['POLICYKEY', 'POLICY_KEY']) ?? '';
+    const custName = firstValue(r, columns, ['CUSTOMER_NAME', 'CUST_NAME']) ?? '';
+    const policyClass = String(firstValue(r, columns, ['CLASS']) ?? '').trim().toUpperCase();
+    const premiumValue = firstValue(r, columns, ['PREMIUM', 'GROSS_PREMIUM']);
+    const commissionValue = firstValue(r, columns, ['COMM', 'COMMISSION']);
+    const premium = finiteNumber(premiumValue);
+    const comm = finiteNumber(commissionValue) ?? 0;
 
-    const regDate = parseDate(r.REGISTRATN_DT || r.registratn_dt || r['REG DATE']);
-    const startDate = parseDate(r.START_DATE || r.start_date);
-    let endDate = parseDate(r.END_DATE || r.end_date);
+    const rawRegDate = firstValue(r, columns, ['REGISTRATN_DT', 'REG_DATE']);
+    const rawStartDate = firstValue(r, columns, ['START_DATE']);
+    const rawEndDate = firstValue(r, columns, ['END_DATE']);
+    const regDate = parseDate(rawRegDate);
+    const startDate = parseDate(rawStartDate);
+    let endDate = parseDate(rawEndDate);
+    const reviewValues = [policyKey, custName, policyClass, rawRegDate ?? '', rawStartDate ?? '', rawEndDate ?? '', premiumValue ?? ''];
 
-    if (!regDate || !startDate) continue;
+    if (!regDate) {
+      sendToReview(i + 2, reviewValues, 'Invalid registration date');
+      continue;
+    }
+    if (regDate > valEnd) {
+      sendToReview(i + 2, reviewValues, 'Registration date is after valuation date');
+      continue;
+    }
+    if (!startDate) {
+      sendToReview(i + 2, reviewValues, 'Invalid start date');
+      continue;
+    }
+    if (!policyClass) {
+      sendToReview(i + 2, reviewValues, 'Missing class');
+      continue;
+    }
+    if (premium === null) {
+      sendToReview(i + 2, reviewValues, 'Invalid premium');
+      continue;
+    }
 
     endDate = getEndDate(policyClass, startDate, endDate);
-    if (!endDate) continue;
+    if (!endDate) {
+      sendToReview(i + 2, reviewValues, 'Missing or invalid end date');
+      continue;
+    }
 
     const dateToUse = getDateToUse(startDate, endDate, valStart);
-    const duration = useDuration(startDate, endDate, regDate, valStart, dateToUse);
+    const duration = calculateDuration(startDate, endDate, regDate, valStart, dateToUse);
+    if (duration <= 0) {
+      sendToReview(i + 2, reviewValues, 'End date is before calculation start date');
+      continue;
+    }
     const gwp = gwpytd(regDate, valEnd, premium);
     const expDays = exposedDays(dateToUse, valEnd, endDate, gwp);
     const earnedFrac = earnedFraction(expDays, duration, dateToUse, gwp);
@@ -235,8 +328,7 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
     s.gwpYtd += safeGwp;
     s.exposure += expDays;
 
-    // Collect detail row
-    detailRows.push({
+    const detail = {
       policyKey,
       custName,
       startDate: startDate.toISOString().split('T')[0],
@@ -253,87 +345,56 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
       unearnedPremium: safeUnearnedPrm,
       dac: safeDac,
       gwpYtd: safeGwp
-    });
+    };
+
+    const outputRow = calcSheet.getRow(calculationRow++);
+    [
+      detail.policyKey, detail.custName, detail.startDate, detail.endDate,
+      detail.premium, detail.commission, detail.class, detail.regDate,
+      detail.duration, detail.exposedDays, detail.earnedFrac, detail.earnedPremium,
+      detail.unePeriod, detail.unearnedPremium, detail.dac, detail.gwpYtd
+    ].forEach((value, column) => { outputRow.getCell(column + 1).value = value; });
+    outputRow.commit();
+
+    audit.calculatedRows++;
+    if (detailRows.length < previewLimit) detailRows.push(detail);
   }
 
   postProgress('Generating Excel Output...', 75);
-
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(templateBuffer);
-
-  // --- Write "Calculation" sheet ---
-  const calcSheet = wb.getWorksheet('Calculation');
-  if (calcSheet) {
-    // Cell E1 = Start Period, Cell G1 = Val Date
-    calcSheet.getCell('E1').value = new Date(valStartStr);
-    calcSheet.getCell('E1').numFmt = 'DD/MM/YYYY';
-    calcSheet.getCell('H1').value = new Date(valEndStr);
-    calcSheet.getCell('H1').numFmt = 'DD/MM/YYYY';
-
-    // Data starts at row 3. Columns: A..P = policyKey, custName, startDate, endDate, premium, commission,
-    // class, regDate, duration, exposedDays, earnedFrac, earnedPremium, unePeriod, unearnedPremium, dac, gwpYtd
-    let rowNum = 3;
-    for (const d of detailRows) {
-      const row = calcSheet.getRow(rowNum);
-      row.getCell(1).value = d.policyKey;
-      row.getCell(2).value = d.custName;
-      row.getCell(3).value = d.startDate;
-      row.getCell(4).value = d.endDate;
-      row.getCell(5).value = d.premium;
-      row.getCell(6).value = d.commission;
-      row.getCell(7).value = d.class;
-      row.getCell(8).value = d.regDate;
-      row.getCell(9).value = d.duration;
-      row.getCell(10).value = d.exposedDays;
-      row.getCell(11).value = d.earnedFrac;
-      row.getCell(12).value = d.earnedPremium;
-      row.getCell(13).value = d.unePeriod;
-      row.getCell(14).value = d.unearnedPremium;
-      row.getCell(15).value = d.dac;
-      row.getCell(16).value = d.gwpYtd;
-      row.commit();
-      rowNum++;
-    }
-  }
+  audit.previewRows = detailRows.length;
+  rows.length = 0;
 
   // --- Write "Summary" sheet ---
   const summarySheet = wb.getWorksheet('Summary');
   if (summarySheet) {
-    let rowNum = 1;
-    let totEarned = 0, totUnearned = 0, totDac = 0, totGwp = 0, totExp = 0;
+    let totEarned = 0, totUnearned = 0, totDac = 0, totGwp = 0;
 
     for (const [cls, s] of summaryMap.entries()) {
-      const row = summarySheet.getRow(rowNum);
-      row.getCell(1).value = cls;
-      row.getCell(2).value = s.earnedPremium;
-      row.getCell(3).value = s.unearnedPremium;
-      row.getCell(4).value = s.dac;
-      row.getCell(5).value = s.gwpYtd;
-      row.getCell(6).value = s.exposure;
-      row.commit();
+      for (let rowNum = 4; rowNum <= 11; rowNum++) {
+        const row = summarySheet.getRow(rowNum);
+        if (String(row.getCell(2).value ?? '').trim().toUpperCase() !== cls) continue;
+        row.getCell(3).value = s.earnedPremium;
+        row.getCell(4).value = s.unearnedPremium;
+        row.getCell(5).value = s.dac;
+        row.getCell(6).value = s.gwpYtd;
+        break;
+      }
       totEarned += s.earnedPremium;
       totUnearned += s.unearnedPremium;
       totDac += s.dac;
       totGwp += s.gwpYtd;
-      totExp += s.exposure;
-      rowNum++;
     }
 
-    // Total row
-    const totRow = summarySheet.getRow(rowNum);
-    totRow.getCell(1).value = 'TOTAL';
-    totRow.getCell(2).value = totEarned;
-    totRow.getCell(3).value = totUnearned;
-    totRow.getCell(4).value = totDac;
-    totRow.getCell(5).value = totGwp;
-    totRow.getCell(6).value = totExp;
+    const totRow = summarySheet.getRow(12);
+    totRow.getCell(2).value = 'TOTAL';
+    totRow.getCell(3).value = totEarned;
+    totRow.getCell(4).value = totUnearned;
+    totRow.getCell(5).value = totDac;
+    totRow.getCell(6).value = totGwp;
     totRow.commit();
   }
 
   postProgress('Finalizing Excel File...', 90);
-  const outBuffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([outBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
   const summaryArray = Array.from(summaryMap.entries())
     .map(([cls, s]) => ({
       class: cls,
@@ -346,7 +407,31 @@ async function processFile(file: File, valStartStr: string, valEndStr: string, t
     }))
     .sort((a, b) => a.class.localeCompare(b.class));
 
-  self.postMessage({ type: 'complete', blob, summary: summaryArray, detailRows });
+  const summaryDataSheet = wb.getWorksheet('Summary Data') || wb.addWorksheet('Summary Data');
+  summaryDataSheet.addRow(['CLASS', 'EARNED PREMIUM', 'UNEARNED PREMIUM', 'DAC', 'GWP YTD', 'EXPOSURE']);
+  for (const summary of summaryArray) {
+    summaryDataSheet.addRow([
+      summary.class,
+      summary.earnedPremium,
+      summary.unearnedPremium,
+      summary.dac,
+      summary.gwpYtd,
+      summary.exposure
+    ]);
+  }
+  summaryDataSheet.addRow([
+    'TOTAL',
+    summaryArray.reduce((total, row) => total + row.earnedPremium, 0),
+    summaryArray.reduce((total, row) => total + row.unearnedPremium, 0),
+    summaryArray.reduce((total, row) => total + row.dac, 0),
+    summaryArray.reduce((total, row) => total + row.gwpYtd, 0),
+    summaryArray.reduce((total, row) => total + row.exposure, 0)
+  ]);
+
+  const outBuffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([outBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+  self.postMessage({ type: 'complete', blob, summary: summaryArray, detailRows, audit });
 }
 
 self.onmessage = (event: MessageEvent<EpWorkerMessage>) => {

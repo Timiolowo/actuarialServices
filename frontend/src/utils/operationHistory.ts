@@ -17,7 +17,7 @@ export interface OperationHistoryEntry {
 }
 
 const HISTORY_STORAGE_KEY = 'actuarial-operation-history-v1';
-const MAX_HISTORY_ENTRIES = 100;
+const MAX_HISTORY_ENTRIES = 10;
 
 export function readOperationHistory(): OperationHistoryEntry[] {
   try {
