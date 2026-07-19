@@ -84,9 +84,9 @@ const parquetBatchSize = 10_000;
 const textEncoder = new TextEncoder();
 
 const calculationHeaders = [
-  'POLICY KEY', 'CUST NAME', 'START DATE', 'END DATE', 'GROSS PREMIUM', 'COMMISSION',
-  'CLASS', 'REG DATE', 'DURATION', 'EARNED PERIOD', 'EARNED FRAC', 'EARNED PREM',
-  'UPR_PERIOD', 'UPR', 'DAC', 'GWP YTD'
+  'POLICYKEY', 'CUSTOMER_NAME', 'START_DATE', 'END_DATE', 'PREMIUM', 'COMM',
+  'CLASS', 'REGISTRATN_DT', 'DURATION', 'EXPOSED_DAYS', 'EARNED_FRAC', 'EARNED_PREMIUM',
+  'UNE_PERIOD', 'UNEARNED_PREM', 'DAC', 'GWP_YTD'
 ];
 
 const requiredColumnGroups = [
