@@ -13,6 +13,8 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const JSZip = require('jszip');
+const { processRevisedComposite } = require('./revisedCompositeLogic');
+const { processDataSorting } = require('./dataSortingLogic');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -866,6 +868,122 @@ app.post('/api/process', upload.any(), (req, res) => {
     status: job.status,
     currentStatus: job.currentStatus,
     progressPercent: job.progressPercent
+  });
+});
+
+app.post('/api/process/revised-composite', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Please upload a FINCON Report Excel file.' });
+  }
+
+  try {
+    const finconPath = req.file.path;
+    const templatePath = path.join(__dirname, 'templates', 'Revised Composite Template.xlsx');
+    const outputPath = path.join(os.tmpdir(), `Revised_Composite_${Date.now()}.xlsx`);
+
+    const rates = {
+      USD: req.body.usdRate || 0,
+      GBP: req.body.gbpRate || 0,
+      EUR: req.body.eurRate || 0
+    };
+
+    let sheetMapping = {};
+    if (req.body.sheetMapping) {
+      try {
+        sheetMapping = JSON.parse(req.body.sheetMapping);
+      } catch (e) {
+        console.warn('Invalid sheetMapping JSON');
+      }
+    }
+
+    const result = await processRevisedComposite(finconPath, templatePath, outputPath, rates, sheetMapping);
+
+    const downloadId = Date.now().toString();
+    processingJobs.set(downloadId, {
+      outputPath,
+      finconPath,
+      type: 'revised-composite',
+      fileName: result.fileName || 'Revised_Composite.xlsx'
+    });
+
+    res.json({
+      summary: result,
+      downloadId
+    });
+  } catch (error) {
+    console.error('Revised composite processing error:', error);
+    res.status(500).json({ error: 'Failed to process revised composite.' });
+  }
+});
+
+app.get('/api/process/download-composite/:id', (req, res) => {
+  const job = processingJobs.get(req.params.id);
+  if (!job || job.type !== 'revised-composite') {
+    return res.status(404).json({ error: 'Download not found or expired.' });
+  }
+
+  res.download(job.outputPath, job.fileName || 'Revised_Composite.xlsx', (err) => {
+    if (err) console.error('Error downloading revised composite:', err);
+    // Cleanup
+    fs.unlink(job.finconPath, () => {});
+    fs.unlink(job.outputPath, () => {});
+    processingJobs.delete(req.params.id);
+  });
+});
+
+app.post('/api/process/data-sorting', upload.fields([
+  { name: 'fincon', maxCount: 1 },
+  { name: 'currentMonth', maxCount: 1 },
+  { name: 'previousMonth', maxCount: 1 }
+]), async (req, res) => {
+  if (!req.files || !req.files.fincon || !req.files.currentMonth || !req.files.previousMonth) {
+    return res.status(400).json({ error: 'Please upload all three required files: Fincon, Current Month, and Previous Month.' });
+  }
+
+  try {
+    const finconPath = req.files.fincon[0].path;
+    const currentMonthPath = req.files.currentMonth[0].path;
+    const previousMonthPath = req.files.previousMonth[0].path;
+
+    const templatePath = path.join(__dirname, 'templates', 'DataSorting.xlsx');
+    const outputPath = path.join(os.tmpdir(), `Data_Sorting_${Date.now()}.xlsx`);
+
+    const result = await processDataSorting(currentMonthPath, previousMonthPath, finconPath, templatePath, outputPath);
+
+    const downloadId = Date.now().toString();
+    processingJobs.set(downloadId, {
+      outputPath,
+      finconPath,
+      currentMonthPath,
+      previousMonthPath,
+      type: 'data-sorting',
+      fileName: result.fileName || 'Data_Sorting.xlsx'
+    });
+
+    res.json({
+      summary: result,
+      downloadId
+    });
+  } catch (error) {
+    console.error('Data sorting processing error:', error);
+    res.status(500).json({ error: 'Failed to process data sorting.' });
+  }
+});
+
+app.get('/api/process/download-data-sorting/:id', (req, res) => {
+  const job = processingJobs.get(req.params.id);
+  if (!job || job.type !== 'data-sorting') {
+    return res.status(404).json({ error: 'Download not found or expired.' });
+  }
+
+  res.download(job.outputPath, job.fileName || 'Data_Sorting.xlsx', (err) => {
+    if (err) console.error('Error downloading data sorting file:', err);
+    // Cleanup
+    fs.unlink(job.finconPath, () => {});
+    fs.unlink(job.currentMonthPath, () => {});
+    fs.unlink(job.previousMonthPath, () => {});
+    fs.unlink(job.outputPath, () => {});
+    processingJobs.delete(req.params.id);
   });
 });
 

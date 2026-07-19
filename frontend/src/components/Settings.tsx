@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { GROUP1_SHEETS, GROUP2_SHEETS, GROUP3_SHEETS, GROUP4_SHEETS } from '../utils/processor';
+import { CALCULATION_METHODOLOGIES } from '../config/calculationMethodologies';
 
 interface SettingsProps {
   onBack: () => void;
@@ -41,7 +42,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack }) => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem' }}>App Configuration</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Configure actuarial formulas, data mappings, and general settings</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Review calculation methodologies, data mappings, and general settings</p>
         </div>
         {onBack && (
           <button className="btn-secondary" onClick={onBack} style={{ padding: '0.5rem 1rem' }}>
@@ -168,16 +169,75 @@ export const Settings: React.FC<SettingsProps> = ({ onBack }) => {
         )}
 
         {activeTab === 'formulas' && (
-          <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center', animation: 'fadeIn 0.3s ease-out' }}>
-            <div style={{ color: 'var(--primary)', marginBottom: '1rem' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="48" height="48" style={{ margin: '0 auto' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14.25 9.75L16.5 12l-2.25 2.25m-4.5 0L7.5 12l2.25-2.25M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
-              </svg>
+          <div style={{ animation: 'fadeIn 0.3s ease-out', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {CALCULATION_METHODOLOGIES.map(methodology => (
+              <section key={methodology.id} className="glass-panel" style={{ padding: '2rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+                  <div>
+                    <div style={{ color: 'var(--primary)', fontFamily: 'monospace', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.4rem' }}>P&amp;C Analysis Methodology</div>
+                    <h2 style={{ margin: '0 0 0.5rem 0' }}>{methodology.name}</h2>
+                    <p style={{ color: 'var(--text-muted)', margin: 0, maxWidth: '760px', lineHeight: 1.6 }}>{methodology.description}</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <span style={{ padding: '0.35rem 0.65rem', borderRadius: '999px', border: '1px solid rgba(56, 189, 248, 0.35)', background: 'rgba(56, 189, 248, 0.08)', color: 'var(--primary)', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Read only</span>
+                    <span style={{ padding: '0.35rem 0.65rem', borderRadius: '999px', border: '1px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '0.72rem', fontFamily: 'monospace' }}>v{methodology.version}</span>
+                  </div>
+                </div>
+
+                <div style={{ padding: '0.85rem 1rem', marginBottom: '1.5rem', borderRadius: '8px', border: '1px solid rgba(245, 158, 11, 0.3)', background: 'rgba(245, 158, 11, 0.06)', color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.6 }}>
+                  This documents the formula logic currently used by the Earned Premium calculation. Nothing on this page can change calculation results yet.
+                </div>
+
+                <h3 style={{ fontSize: '1rem', margin: '0 0 0.9rem 0' }}>Calculation sequence</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '0.85rem', marginBottom: '1.75rem' }}>
+                  {methodology.formulas.map((formula, index) => (
+                    <article key={formula.name} style={{ padding: '1rem', border: '1px solid var(--border-color)', borderRadius: '9px', background: 'rgba(255,255,255,0.02)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.65rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <span style={{ display: 'inline-flex', width: '24px', height: '24px', borderRadius: '50%', alignItems: 'center', justifyContent: 'center', background: 'rgba(56, 189, 248, 0.1)', color: 'var(--primary)', fontFamily: 'monospace', fontSize: '0.72rem', fontWeight: 700 }}>{index + 1}</span>
+                          <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{formula.name}</h4>
+                        </div>
+                        <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.68rem', textTransform: 'uppercase' }}>{formula.output}</span>
+                      </div>
+                      <code style={{ display: 'block', padding: '0.75rem', borderRadius: '6px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--primary)', fontSize: '0.78rem', lineHeight: 1.55, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{formula.formula}</code>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.55, margin: '0.7rem 0 0 0' }}>{formula.description}</p>
+                    </article>
+                  ))}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+                  <div style={{ padding: '1rem', borderRadius: '9px', border: '1px solid var(--border-color)' }}>
+                    <h3 style={{ fontSize: '0.9rem', color: 'var(--primary)', margin: '0 0 0.75rem 0' }}>Methodology rules</h3>
+                    <ul style={{ margin: 0, paddingLeft: '1.1rem', color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: 1.7 }}>
+                      {methodology.rules.map(rule => <li key={rule}>{rule}</li>)}
+                    </ul>
+                  </div>
+                  <div style={{ padding: '1rem', borderRadius: '9px', border: '1px solid var(--border-color)' }}>
+                    <h3 style={{ fontSize: '0.9rem', color: '#f59e0b', margin: '0 0 0.75rem 0' }}>Validation and exclusions</h3>
+                    <ul style={{ margin: 0, paddingLeft: '1.1rem', color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: 1.7 }}>
+                      {methodology.validations.map(rule => <li key={rule}>{rule}</li>)}
+                    </ul>
+                  </div>
+                  <div style={{ padding: '1rem', borderRadius: '9px', border: '1px solid var(--border-color)' }}>
+                    <h3 style={{ fontSize: '0.9rem', color: 'var(--secondary)', margin: '0 0 0.75rem 0' }}>Required source fields</h3>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                      {methodology.requiredInputs.map(input => <code key={input} style={{ padding: '0.3rem 0.45rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)', fontSize: '0.7rem' }}>{input}</code>)}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.55rem' }}>Calculated outputs</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                    {methodology.outputs.map(output => <span key={output} style={{ padding: '0.3rem 0.55rem', borderRadius: '999px', background: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.25)', color: '#22c55e', fontSize: '0.72rem' }}>{output}</span>)}
+                  </div>
+                </div>
+              </section>
+            ))}
+
+            <div className="glass-panel" style={{ padding: '1.25rem 1.5rem', color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.6 }}>
+              Additional modules—including Revised Composite—can be added here as separate methodology sections without changing the Earned Premium documentation.
             </div>
-            <h2 style={{ marginBottom: '1rem' }}>Formulas & Logic Configuration</h2>
-            <p style={{ color: 'var(--text-muted)', maxWidth: '600px', margin: '0 auto' }}>
-              This section will allow you to edit the specific formulas and calculation logic that directly affect your numbers. The comprehensive formula editor will be available here once the calculations are provided.
-            </p>
           </div>
         )}
 

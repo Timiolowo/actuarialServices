@@ -138,14 +138,15 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
     });
   }, [logs, showToast]);
 
-  const canProceedStep1 =
-    modelInput !== null && 
-    reserveData !== null && 
-    valuationDate !== null && 
-    reserveData.missingSheets.length === 0 &&
-    reserveData.errors.length === 0 &&
-    reserveData.gross.every(lob => lob.dateMatches) &&
-    reserveData.ri.every(lob => lob.dateMatches);
+  const canProceedStep1 = _portfolioId === 'pc'
+    ? (modelInput !== null && 
+       reserveData !== null && 
+       valuationDate !== null && 
+       reserveData.missingSheets.length === 0 &&
+       reserveData.errors.length === 0 &&
+       reserveData.gross.every(lob => lob.dateMatches) &&
+       reserveData.ri.every(lob => lob.dateMatches))
+    : (valuationDate !== null);
     
   const allUploadMatches = [...grossMatches, ...riMatches];
   const unmatchedUploadMatches = allUploadMatches.filter(match => match.section === 'Unmatched');
@@ -313,7 +314,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
 
   const handleSectionUploads = useCallback(async (section: UploadSection, files: File[]) => {
     const sectionLabel = section === 'gross' ? 'Gross' : 'Reinsurance';
-    if (!modelInput) {
+    if (_portfolioId === 'pc' && !modelInput) {
       const msg = 'Upload and validate the Reserve Split Template before adding calculation-engine files.';
       if (section === 'gross') setGrossUploadError(msg);
       else setRiUploadError(msg);
@@ -332,12 +333,20 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
       return;
     }
 
-    const matches = buildUploadMatches(
+    const matches = _portfolioId === 'pc' && modelInput ? buildUploadMatches(
       nextFiles,
       section === 'gross' ? modelInput.grossData : modelInput.riData,
       section === 'gross' ? modelInput.grossHeaders : modelInput.riHeaders,
       section === 'gross' ? 'Gross' : 'RI'
-    );
+    ) : nextFiles.map(file => ({
+      file,
+      fileName: file.name,
+      section: (section === 'gross' ? 'Gross' : 'RI') as "Gross" | "RI",
+      id: file.name,
+      lobName: 'Unknown',
+      matchCount: 1,
+      matchedLabels: []
+    }));
     const unmatched = matches.filter(match => match.section === 'Unmatched');
     const matchError = unmatched.length > 0
       ? `${unmatched.length} ${sectionLabel} file${unmatched.length === 1 ? '' : 's'} could not be matched to Modellinput: ${unmatched.slice(0, 3).map(match => match.fileName).join(', ')}${unmatched.length > 3 ? `, plus ${unmatched.length - 3} more` : ''}. Check the LOB name in each filename.`
@@ -423,20 +432,22 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
     let message: string | null = null;
     if (!valuationDate) {
       message = 'Select both a valuation year and month.';
-    } else if (!workbookFile) {
-      message = 'Upload the Reserve Split Template before continuing.';
-    } else if (parseError) {
-      message = parseError;
-    } else if (!modelInput) {
-      message = 'The template must contain a readable "Modellinput" sheet with Gross or RI data.';
-    } else if (!reserveData) {
-      message = 'No reserve data could be extracted from the uploaded template.';
-    } else if (reserveData.missingSheets.length > 0) {
-      message = `Add the missing LOB sheet${reserveData.missingSheets.length === 1 ? '' : 's'}: ${reserveData.missingSheets.join(', ')}.`;
-    } else if (reserveData.errors.length > 0) {
-      message = reserveData.errors.slice(0, 2).join(' ');
-    } else if (reserveParseError) {
-      message = reserveParseError;
+    } else if (_portfolioId === 'pc') {
+      if (!workbookFile) {
+        message = 'Upload the Reserve Split Template before continuing.';
+      } else if (parseError) {
+        message = parseError;
+      } else if (!modelInput) {
+        message = 'The template must contain a readable "Modellinput" sheet with Gross or RI data.';
+      } else if (!reserveData) {
+        message = 'No reserve data could be extracted from the uploaded template.';
+      } else if (reserveData.missingSheets.length > 0) {
+        message = `Add the missing LOB sheet${reserveData.missingSheets.length === 1 ? '' : 's'}: ${reserveData.missingSheets.join(', ')}.`;
+      } else if (reserveData.errors.length > 0) {
+        message = reserveData.errors.slice(0, 2).join(' ');
+      } else if (reserveParseError) {
+        message = reserveParseError;
+      }
     }
 
     if (message || !canProceedStep1) {
@@ -654,6 +665,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
             </div>
           </div>
 
+          {_portfolioId === 'pc' && (
           <div className="glass-panel" style={{ padding: '2rem', marginBottom: '1.5rem' }}>
             <div className="section-divider">Upload Reserve Split Template</div>
             <div
@@ -884,6 +896,7 @@ export const DataProcessing: React.FC<DataProcessingProps> = ({ portfolioId: _po
               </div>
             )}
           </div>
+          )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
             <button 

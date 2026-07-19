@@ -15,6 +15,7 @@ interface ProcessingAudit {
 }
 
 type ViewTab = 'summary' | 'detail';
+type DateFilterField = 'regDate' | 'startDate' | 'endDate';
 
 const DETAIL_COLUMNS = [
   { key: 'policyKey', label: 'Policy Key' },
@@ -55,7 +56,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
   const lastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
   const defEnd = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, '0')}-${String(lastMonth.getDate()).padStart(2, '0')}`;
 
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [valStart, setValStart] = useState(defStart);
   const [valEnd, setValEnd] = useState(defEnd);
 
@@ -63,7 +64,8 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
   const [hasResults, setHasResults] = useState(false);
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
-  const [resultBlob, setResultBlob] = useState<Blob | null>(null);
+  const [summaryWorkbook, setSummaryWorkbook] = useState<Blob | null>(null);
+  const [calculationFile, setCalculationFile] = useState<File | null>(null);
   const [summaryData, setSummaryData] = useState<any[]>([]);
   const [detailRows, setDetailRows] = useState<any[]>([]);
   const [audit, setAudit] = useState<ProcessingAudit | null>(null);
@@ -73,19 +75,42 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>('summary');
   const [searchQuery, setSearchQuery] = useState('');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [dateFilterField, setDateFilterField] = useState<DateFilterField>('regDate');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(0);
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
 
   // Drag state
   const [dragActive, setDragActive] = useState(false);
 
   const workerRef = useRef<Worker | null>(null);
+  const workspaceRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     return () => {
       if (workerRef.current) workerRef.current.terminate();
+      const workspaceName = workspaceRef.current;
+      if (workspaceName) {
+        navigator.storage.getDirectory()
+          .then(root => root.removeEntry(workspaceName, { recursive: true }))
+          .catch(() => undefined);
+      }
     };
   }, []);
+
+  const clearDownloadedFiles = () => {
+    const workspaceName = workspaceRef.current;
+    workspaceRef.current = null;
+    if (workspaceName) {
+      navigator.storage.getDirectory()
+        .then(root => root.removeEntry(workspaceName, { recursive: true }))
+        .catch(() => undefined);
+    }
+    setSummaryWorkbook(null);
+    setCalculationFile(null);
+  };
 
   const handleDrag = (e: React.DragEvent, active: boolean) => {
     e.preventDefault();
@@ -97,24 +122,25 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFiles(Array.from(e.dataTransfer.files));
       setHasResults(false);
       setErrorMsg('');
     }
   };
 
   const handleProcess = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setIsProcessing(true);
     setProgress(0);
     setStatusMsg('Loading template...');
     setErrorMsg('');
-    setResultBlob(null);
+    clearDownloadedFiles();
     setAudit(null);
 
     try {
-      const templateRes = await fetch('/templates/Earned%20Premium%20Data.xlsx');
+      const templateUrl = `${import.meta.env.BASE_URL}templates/Earned%20Premium%20Template.xlsx`;
+      const templateRes = await fetch(templateUrl);
       if (!templateRes.ok) throw new Error('Could not load the local Excel template.');
       const templateBuffer = await templateRes.arrayBuffer();
 
@@ -127,13 +153,19 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
         } else if (data.type === 'complete') {
           setIsProcessing(false);
           setHasResults(true);
-          setResultBlob(data.blob);
+          setSummaryWorkbook(data.summaryWorkbook);
+          setCalculationFile(data.calculationFile);
+          workspaceRef.current = data.workspaceName;
+          setFiles([]);
           if (data.summary) setSummaryData(data.summary);
           if (data.detailRows) setDetailRows(data.detailRows);
           if (data.audit) setAudit(data.audit);
           setCurrentPage(0);
           setSearchQuery('');
           setColumnFilters({});
+          setDateFrom('');
+          setDateTo('');
+          setSortConfig(null);
           setActiveTab('summary');
           workerRef.current?.terminate();
         } else if (data.type === 'error') {
@@ -145,7 +177,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
 
       workerRef.current.postMessage({
         type: 'start',
-        file,
+        files,
         valStartStr: valStart,
         valEndStr: valEnd,
         templateBuffer
@@ -156,16 +188,16 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     }
   };
 
-  const downloadResult = () => {
-    if (!resultBlob) return;
-    const url = URL.createObjectURL(resultBlob);
+  const downloadAsset = (asset: Blob | null, filename: string) => {
+    if (!asset) return;
+    const url = URL.createObjectURL(asset);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Earned_Premium_${valEnd}.xlsx`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // ---- Filtered and paginated detail data ----
@@ -193,8 +225,38 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
       });
     }
 
+    if (dateFrom || dateTo) {
+      data = data.filter(row => {
+        const value = String(row[dateFilterField] || '');
+        if (!value) return false;
+        return (!dateFrom || value >= dateFrom) && (!dateTo || value <= dateTo);
+      });
+    }
+
+    if (sortConfig) {
+      data = [...data].sort((a, b) => {
+        const valA = a[sortConfig.key];
+        const valB = b[sortConfig.key];
+        
+        // Handle null/undefined
+        if (valA == null && valB != null) return sortConfig.direction === 'asc' ? 1 : -1;
+        if (valA != null && valB == null) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA == null && valB == null) return 0;
+
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
+        }
+
+        const strA = String(valA).toLowerCase();
+        const strB = String(valB).toLowerCase();
+        if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
     return data;
-  }, [detailRows, searchQuery, columnFilters]);
+  }, [detailRows, searchQuery, columnFilters, dateFilterField, dateFrom, dateTo, sortConfig]);
 
   const totalPages = Math.max(1, Math.ceil(filteredDetail.length / ROWS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages - 1);
@@ -315,26 +377,30 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
                 style={{ cursor: 'pointer', padding: '1.25rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-                <input type="file" ref={fileInputRef} accept=".csv,.parquet,.xlsx,.xls"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFile(f); setHasResults(false); setErrorMsg(''); } e.target.value = ''; }}
+                <input type="file" ref={fileInputRef} accept=".csv,.parquet,.xlsx,.xls" multiple
+                  onChange={(e) => { if (e.target.files && e.target.files.length > 0) { setFiles(Array.from(e.target.files)); setHasResults(false); setErrorMsg(''); } e.target.value = ''; }}
                   style={{ display: 'none' }} />
                 <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(56, 189, 248, 0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: 'var(--primary)' }}>
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" width="22" height="22">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z" />
                   </svg>
                 </div>
-                {file ? (
+                {files.length > 0 ? (
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
-                      <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>{file.name}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{(file.size / 1024 / 1024).toFixed(2)} MB</div>
+                      <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)' }}>
+                        {files.length === 1 ? files[0].name : `${files.length} files selected`}
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        {(files.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(2)} MB total
+                      </div>
                     </div>
-                    <button type="button" className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setFile(null); }}>Remove</button>
+                    <button type="button" className="btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setFiles([]); }}>Remove All</button>
                   </div>
                 ) : (
                   <div style={{ flex: 1 }}>
-                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.95rem', color: 'var(--text)' }}><strong>Click to browse</strong> or drag file here</p>
-                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.75rem' }}>Supports .parquet, .csv, and .xlsx</p>
+                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.95rem', color: 'var(--text)' }}><strong>Click to browse</strong> or drag files here</p>
+                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.75rem' }}>Supports .parquet, .csv, and .xlsx. Select or drag multiple files at once.</p>
                   </div>
                 )}
               </div>
@@ -344,11 +410,11 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           <div className="glass-panel action-bar">
             <div style={{ display: 'flex', gap: '1rem' }}>
               <button className="btn-primary" style={{ padding: '0.75rem 2rem', fontSize: '1rem', fontWeight: 600 }}
-                onClick={handleProcess} disabled={isProcessing || !file}>
+                onClick={handleProcess} disabled={isProcessing || files.length === 0}>
                 Calculate Earned Premium
               </button>
-              <button className="btn-secondary" onClick={() => { setFile(null); setValStart(defStart); setValEnd(defEnd); }}
-                disabled={isProcessing || !file}>
+              <button className="btn-secondary" onClick={() => { setFiles([]); setValStart(defStart); setValEnd(defEnd); }}
+                disabled={isProcessing || files.length === 0}>
                 Clear
               </button>
             </div>
@@ -357,45 +423,46 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
       ) : (
         <div style={{ animation: 'fadeIn 0.4s ease-out' }}>
           {/* Success Header */}
-          <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', marginBottom: '1.5rem' }}>
-            <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'center' }}>
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(34, 197, 94, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" width="32" height="32">
+          <div className="glass-panel" style={{ padding: '1.5rem', textAlign: 'center', marginBottom: '1rem' }}>
+            <div style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'center' }}>
+              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(34, 197, 94, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" width="24" height="24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
             </div>
-            <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem', fontWeight: 600 }}>Calculation Complete!</h2>
-            <p style={{ color: 'var(--text-muted)', maxWidth: '500px', margin: '0 auto 1.5rem auto', lineHeight: 1.6 }}>
-              {(audit?.calculatedRows ?? detailRows.length).toLocaleString()} rows calculated. Your downloaded workbook contains every calculated row and a Review sheet for rows that need attention.
+            <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', fontWeight: 600 }}>Calculation Complete!</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '650px', margin: '0 auto 1rem auto', lineHeight: 1.5 }}>
+              {(audit?.calculatedRows ?? detailRows.length).toLocaleString()} rows calculated. The detailed calculation is available as CSV, and the summary has been written into the template’s RESULT sheet.
             </p>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-              <button className="btn-secondary" onClick={() => { setFile(null); setHasResults(false); }}>Start Over</button>
-              <button className="btn-primary" onClick={downloadResult} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="20" height="20">
+            <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <button className="btn-secondary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={() => { setHasResults(false); clearDownloadedFiles(); }}>Start Over</button>
+              <button className="btn-primary" onClick={() => downloadAsset(summaryWorkbook, `Earned_Premium_Result_${valEnd}.xlsx`)} disabled={!summaryWorkbook} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" width="16" height="16">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                 </svg>
-                Download Earned Premium Report
+                Download RESULT Workbook
               </button>
+              <button className="btn-secondary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={() => downloadAsset(calculationFile, calculationFile?.name || `Earned_Premium_Calculation_${valEnd}.csv`)} disabled={!calculationFile}>Download Calculation CSV</button>
             </div>
           </div>
 
           {audit && (
-            <div className="glass-panel" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '1rem', margin: '0 0 1rem 0', color: 'var(--text)' }}>Processing audit</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: audit.reviewRows ? '1rem' : 0 }}>
-                <span style={{ color: 'var(--text-muted)' }}>Input: <strong style={{ color: 'var(--text)' }}>{audit.totalRows.toLocaleString()}</strong></span>
-                <span style={{ color: 'var(--text-muted)' }}>Calculated: <strong style={{ color: '#22c55e' }}>{audit.calculatedRows.toLocaleString()}</strong></span>
-                <span style={{ color: 'var(--text-muted)' }}>Review: <strong style={{ color: audit.reviewRows ? '#f59e0b' : 'var(--text)' }}>{audit.reviewRows.toLocaleString()}</strong></span>
+            <div className="glass-panel" style={{ padding: '1rem', marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '0.9rem', margin: '0 0 0.75rem 0', color: 'var(--text)' }}>Processing KPIs</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem' }}>
+                {[
+                  { label: 'Input rows', value: audit.totalRows, color: 'var(--text)' },
+                  { label: 'Calculated rows', value: audit.calculatedRows, color: '#22c55e' },
+                  { label: 'Validation issues', value: audit.reviewRows, color: audit.reviewRows ? '#f59e0b' : '#22c55e' },
+                  ...Object.entries(audit.reasons).map(([reason, count]) => ({ label: reason, value: count, color: '#f59e0b' }))
+                ].map(kpi => (
+                  <div key={kpi.label} style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.025)' }}>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.04em', lineHeight: 1.2 }}>{kpi.label}</div>
+                    <div style={{ color: kpi.color, fontSize: '1.15rem', fontWeight: 700, marginTop: '0.15rem', fontFamily: 'monospace' }}>{kpi.value.toLocaleString()}</div>
+                  </div>
+                ))}
               </div>
-              {audit.reviewRows > 0 && (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.7 }}>
-                  {Object.entries(audit.reasons).map(([reason, count]) => (
-                    <div key={reason}>{reason}: <strong style={{ color: 'var(--text)' }}>{count.toLocaleString()}</strong></div>
-                  ))}
-                  <div style={{ marginTop: '0.5rem' }}>All reviewed rows are listed in the downloaded workbook’s <strong style={{ color: 'var(--text)' }}>Review</strong> sheet.</div>
-                </div>
-              )}
             </div>
           )}
 
@@ -437,7 +504,6 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>Unearned Premium</th>
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>DAC</th>
                     <th style={{ padding: '0.75rem', textAlign: 'right' }}>GWP YTD</th>
-                    <th style={{ padding: '0.75rem', textAlign: 'right', borderLeft: '2px solid var(--primary)' }}>Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -448,7 +514,6 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                       <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.unearnedPremium)}</td>
                       <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.dac)}</td>
                       <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.gwpYtd)}</td>
-                      <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', borderLeft: '2px solid var(--primary)', fontWeight: 700, color: 'var(--primary)' }}>{formatNum(row.total)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -459,7 +524,6 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                     <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.unearnedPremium, 0))}</td>
                     <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.dac, 0))}</td>
                     <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.gwpYtd, 0))}</td>
-                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', borderLeft: '2px solid var(--primary)', color: 'var(--primary)', fontSize: '0.95rem' }}>{formatNum(summaryData.reduce((s, r) => s + r.total, 0))}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -471,7 +535,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
             <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
               {audit && audit.calculatedRows > audit.previewRows && (
                 <p style={{ margin: '0 0 1rem 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Showing the first {audit.previewRows.toLocaleString()} calculated rows to keep browser memory low. The workbook contains all {audit.calculatedRows.toLocaleString()} calculated rows.
+                  Showing the first {audit.previewRows.toLocaleString()} calculated rows to keep browser memory low. The Calculation CSV contains all {audit.calculatedRows.toLocaleString()} calculated rows.
                 </p>
               )}
               {/* Search + Filter bar */}
@@ -496,6 +560,26 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                 <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontFamily: 'monospace' }}>
                   {filteredDetail.length.toLocaleString()} / {detailRows.length.toLocaleString()} rows
                 </span>
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'end', padding: '0.85rem', marginBottom: '1rem', background: 'rgba(56, 189, 248, 0.04)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                <div style={{ flex: '1 1 170px' }}>
+                  <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>Date field</label>
+                  <select value={dateFilterField} onChange={e => { setDateFilterField(e.target.value as DateFilterField); setCurrentPage(0); }} style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)' }}>
+                    <option value="regDate">Registration date</option>
+                    <option value="startDate">Policy start date</option>
+                    <option value="endDate">Policy end date</option>
+                  </select>
+                </div>
+                <div style={{ flex: '1 1 160px' }}>
+                  <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>From</label>
+                  <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setCurrentPage(0); }} style={{ width: '100%', padding: '0.5rem', boxSizing: 'border-box', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)' }} />
+                </div>
+                <div style={{ flex: '1 1 160px' }}>
+                  <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>To</label>
+                  <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setCurrentPage(0); }} style={{ width: '100%', padding: '0.5rem', boxSizing: 'border-box', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)' }} />
+                </div>
+                <button className="btn-secondary" onClick={() => { setDateFrom(''); setDateTo(''); setCurrentPage(0); }} disabled={!dateFrom && !dateTo} style={{ height: '37px' }}>Clear dates</button>
               </div>
 
               {/* Column filter inputs */}
@@ -532,8 +616,30 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                     <tr style={{ background: 'var(--bg-input)', borderBottom: '2px solid var(--border-color)' }}>
                       <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>#</th>
                       {DETAIL_COLUMNS.map(col => (
-                        <th key={col.key} style={{ padding: '0.5rem 0.6rem', textAlign: col.numeric ? 'right' : 'left', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
-                          {col.label}
+                        <th key={col.key}
+                            onClick={() => {
+                              let direction: 'asc' | 'desc' = 'asc';
+                              if (sortConfig && sortConfig.key === col.key && sortConfig.direction === 'asc') {
+                                direction = 'desc';
+                              }
+                              setSortConfig({ key: col.key, direction });
+                              setCurrentPage(0);
+                            }}
+                            style={{ 
+                              cursor: 'pointer', userSelect: 'none',
+                              padding: '0.5rem 0.6rem', textAlign: col.numeric ? 'right' : 'left', 
+                              whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.7rem', 
+                              textTransform: 'uppercase', letterSpacing: '0.05em', 
+                              color: sortConfig?.key === col.key ? 'var(--primary)' : 'var(--text-muted)' 
+                            }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', justifyContent: col.numeric ? 'flex-end' : 'flex-start' }}>
+                            {col.label}
+                            {sortConfig?.key === col.key && (
+                              <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+                                {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                              </span>
+                            )}
+                          </div>
                         </th>
                       ))}
                     </tr>

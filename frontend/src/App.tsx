@@ -168,7 +168,7 @@ function App() {
             <Route
               path="/:portfolioId/analysis"
               element={activePortfolioId
-                ? <Analysis processedData={processedData} />
+                ? <Analysis portfolioId={activePortfolioId} />
                 : <Navigate to="/" replace />}
             />
             <Route
