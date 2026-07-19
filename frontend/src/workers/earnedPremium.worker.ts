@@ -530,7 +530,9 @@ async function processExcel(file: File, context: ProcessingContext) {
 }
 
 function makeSummaryRows(summaryMap: Map<string, SummaryTotals>): SummaryRow[] {
-  return Array.from(summaryMap.entries()).map(([policyClass, totals]) => ({
+  return Array.from(summaryMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([policyClass, totals]) => ({
     class: policyClass,
     ...totals,
     total: totals.earnedPremium + totals.unearnedPremium + totals.dac + totals.gwpYtd
