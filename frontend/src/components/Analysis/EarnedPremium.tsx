@@ -81,6 +81,10 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
   const [currentPage, setCurrentPage] = useState(0);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
 
+  // Summary filters
+  const [summaryClassFilter, setSummaryClassFilter] = useState<string>('All');
+  const [summaryTopBottom, setSummaryTopBottom] = useState<'All' | 'Top 10' | 'Bottom 10' | 'Top 5' | 'Bottom 5'>('All');
+  const [summarySortMetric, setSummarySortMetric] = useState<'earnedPremium' | 'unearnedPremium' | 'dac' | 'gwpYtd'>('earnedPremium');
   // Drag state
   const [dragActive, setDragActive] = useState(false);
 
@@ -166,6 +170,9 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           setDateFrom('');
           setDateTo('');
           setSortConfig(null);
+          setSummaryClassFilter('All');
+          setSummaryTopBottom('All');
+          setSummarySortMetric('earnedPremium');
           setActiveTab('summary');
           workerRef.current?.terminate();
         } else if (data.type === 'error') {
@@ -199,6 +206,33 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
     document.body.removeChild(a);
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
+
+  // ---- Filtered and sorted summary data ----
+  const processedSummary = useMemo(() => {
+    let result = [...summaryData];
+
+    if (summaryClassFilter !== 'All') {
+      result = result.filter(r => r.class === summaryClassFilter);
+    }
+
+    if (summaryTopBottom !== 'All') {
+      // sort descending by the selected metric
+      result.sort((a, b) => b[summarySortMetric] - a[summarySortMetric]);
+      
+      const count = summaryTopBottom.includes('10') ? 10 : 5;
+      
+      if (summaryTopBottom.startsWith('Bottom')) {
+        // we want the lowest, so we take from the end and reverse so lowest is top
+        result = result.slice(-count).reverse();
+      } else {
+        result = result.slice(0, count);
+      }
+    }
+
+    return result;
+  }, [summaryData, summaryClassFilter, summaryTopBottom, summarySortMetric]);
+
+  const uniqueClasses = useMemo(() => Array.from(new Set(summaryData.map(r => r.class))).sort(), [summaryData]);
 
   // ---- Filtered and paginated detail data ----
   const filteredDetail = useMemo(() => {
@@ -495,7 +529,45 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
           {/* Summary Tab */}
           {activeTab === 'summary' && summaryData.length > 0 && (
             <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
-              <h3 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text)' }}>Summary by Class</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
+                <h3 style={{ fontSize: '1rem', margin: 0, color: 'var(--text)' }}>Summary by Class</h3>
+                
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select 
+                    value={summaryClassFilter}
+                    onChange={(e) => setSummaryClassFilter(e.target.value)}
+                    style={{ background: 'var(--bg-lighter)', color: 'var(--text)', border: '1px solid var(--border-color)', padding: '0.4rem 0.75rem', borderRadius: '4px', fontSize: '0.85rem' }}
+                  >
+                    <option value="All">All Classes</option>
+                    {uniqueClasses.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+
+                  <select 
+                    value={summaryTopBottom}
+                    onChange={(e) => setSummaryTopBottom(e.target.value as any)}
+                    style={{ background: 'var(--bg-lighter)', color: 'var(--text)', border: '1px solid var(--border-color)', padding: '0.4rem 0.75rem', borderRadius: '4px', fontSize: '0.85rem' }}
+                  >
+                    <option value="All">All Items</option>
+                    <option value="Top 5">Top 5</option>
+                    <option value="Top 10">Top 10</option>
+                    <option value="Bottom 5">Bottom 5</option>
+                    <option value="Bottom 10">Bottom 10</option>
+                  </select>
+
+                  <select 
+                    value={summarySortMetric}
+                    onChange={(e) => setSummarySortMetric(e.target.value as any)}
+                    disabled={summaryTopBottom === 'All'}
+                    style={{ background: 'var(--bg-lighter)', color: summaryTopBottom === 'All' ? 'var(--text-muted)' : 'var(--text)', border: '1px solid var(--border-color)', padding: '0.4rem 0.75rem', borderRadius: '4px', fontSize: '0.85rem', opacity: summaryTopBottom === 'All' ? 0.5 : 1 }}
+                  >
+                    <option value="earnedPremium">By Earned Premium</option>
+                    <option value="unearnedPremium">By Unearned Premium</option>
+                    <option value="dac">By DAC</option>
+                    <option value="gwpYtd">By GWP YTD</option>
+                  </select>
+                </div>
+              </div>
+
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
@@ -507,7 +579,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {summaryData.map((row, i) => (
+                  {processedSummary.map((row, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                       <td style={{ padding: '0.75rem', color: 'var(--text)', fontWeight: 500 }}>{row.class}</td>
                       <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.earnedPremium)}</td>
@@ -516,14 +588,19 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                       <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace' }}>{formatNum(row.gwpYtd)}</td>
                     </tr>
                   ))}
+                  {processedSummary.length === 0 && (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No data matches current filters</td>
+                    </tr>
+                  )}
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '2px solid var(--primary)', fontWeight: 700, background: 'rgba(56, 189, 248, 0.04)' }}>
                     <td style={{ padding: '0.75rem', color: 'var(--text)', fontSize: '0.95rem' }}>TOTAL</td>
-                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.earnedPremium, 0))}</td>
-                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.unearnedPremium, 0))}</td>
-                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.dac, 0))}</td>
-                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(summaryData.reduce((s, r) => s + r.gwpYtd, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(processedSummary.reduce((s, r) => s + r.earnedPremium, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(processedSummary.reduce((s, r) => s + r.unearnedPremium, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(processedSummary.reduce((s, r) => s + r.dac, 0))}</td>
+                    <td style={{ padding: '0.75rem', textAlign: 'right', fontFamily: 'monospace', color: 'var(--primary)' }}>{formatNum(processedSummary.reduce((s, r) => s + r.gwpYtd, 0))}</td>
                   </tr>
                 </tfoot>
               </table>
