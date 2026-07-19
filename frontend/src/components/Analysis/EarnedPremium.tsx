@@ -665,14 +665,14 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                   Column Filters
                 </summary>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  {DETAIL_COLUMNS.map(col => (
+                  {DETAIL_COLUMNS.filter(col => !col.numeric && !col.key.toLowerCase().includes('date')).map(col => (
                     <div key={col.key} style={{ flex: '0 0 auto', minWidth: '130px' }}>
                       <label style={{ display: 'block', fontSize: '0.65rem', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem', color: 'var(--text-muted)' }}>
                         {col.label}
                       </label>
                       <input
                         type="text"
-                        placeholder="Filter..."
+                        placeholder={`Filter ${col.label}...`}
                         value={columnFilters[col.key] || ''}
                         onChange={e => setColumnFilter(col.key, e.target.value)}
                         style={{
