@@ -147,16 +147,21 @@ function parseDate(value: unknown): Date | null {
   return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
 }
 
+function addMonthsAndSubtractOneDay(date: Date, months: number): Date {
+  const targetMonth = date.getUTCMonth() + months;
+  const monthEnd = new Date(Date.UTC(date.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
+  const newDate = new Date(Date.UTC(
+    date.getUTCFullYear(),
+    targetMonth,
+    Math.min(date.getUTCDate(), monthEnd)
+  ));
+  newDate.setUTCDate(newDate.getUTCDate() - 1);
+  return newDate;
+}
+
 function getEndDate(policyClass: string, startDate: Date, endDate: Date | null): Date | null {
   if (policyClass === 'MARINE CARGO' && !endDate) {
-    const targetMonth = startDate.getUTCMonth() + 6;
-    const monthEnd = new Date(Date.UTC(startDate.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
-    const sixMonthsLater = new Date(Date.UTC(
-      startDate.getUTCFullYear(),
-      targetMonth,
-      Math.min(startDate.getUTCDate(), monthEnd)
-    ));
-    return sixMonthsLater;
+    return addMonthsAndSubtractOneDay(startDate, 6);
   }
   return endDate;
 }
@@ -204,6 +209,95 @@ function postProgress(status: string, progressPercent: number) {
   self.postMessage({ type: 'progress', status, progressPercent });
 }
 
+// Emulate R's dateToUse
+function getDateToUse(startDate: Date, endDate: Date, valStart: Date): Date | null {
+  if (valStart.getTime() > endDate.getTime()) {
+    return null; // NA in R
+  }
+  return new Date(Math.max(valStart.getTime(), startDate.getTime()));
+}
+
+// Emulate R's useDuration
+function getUseDuration(startDate: Date, endDate: Date, regDate: Date, valStart: Date, dateToUse: Date | null): number {
+  const regYear = regDate.getUTCFullYear();
+  const valYear = valStart.getUTCFullYear();
+  const startYear = startDate.getUTCFullYear();
+  
+  let rtn: Date;
+  if (regYear === valYear && regYear > startYear && dateToUse) {
+    rtn = dateToUse;
+  } else {
+    rtn = startDate;
+  }
+  
+  // +enddate - rtn + 1 (in days)
+  return Math.round((endDate.getTime() - rtn.getTime()) / msPerDay) + 1;
+}
+
+// Emulate R's gwpytd
+function getGwpYtd(regDate: Date, valEnd: Date, premium: number): number {
+  if (regDate.getUTCFullYear() === valEnd.getUTCFullYear() && regDate.getUTCMonth() <= valEnd.getUTCMonth()) {
+    return premium;
+  }
+  return 0;
+}
+
+// Emulate R's exposedDays
+function getExposedDays(dateToUse: Date | null, valEnd: Date, endDate: Date, gwpYtd: number): number {
+  let daysDiff = 0;
+  if (dateToUse === null) {
+    if (gwpYtd !== 0) {
+      daysDiff = 1;
+    }
+  } else {
+    const minDate = new Date(Math.min(valEnd.getTime(), endDate.getTime()));
+    daysDiff = Math.round((minDate.getTime() - dateToUse.getTime()) / msPerDay) + 1;
+  }
+  
+  let rtn = dateToUse === null ? 0 : daysDiff;
+  return rtn < 0 ? 0 : rtn;
+}
+
+// Emulate R's earnedfraction
+function getEarnedFraction(exposedDays: number, duration: number, dateToUse: Date | null, gwpYtd: number): number {
+  let outputA = 0;
+  if (dateToUse === null && gwpYtd !== 0) {
+    outputA = 1;
+  } else {
+    outputA = duration !== 0 ? exposedDays / duration : Infinity;
+  }
+  return !isFinite(outputA) ? 0 : outputA;
+}
+
+// Emulate R's earnedPrem
+function getEarnedPrem(premium: number, earnedFraction: number): number {
+  return premium * earnedFraction;
+}
+
+// Emulate R's unePeriod
+function getUnePeriod(valEnd: Date, endDate: Date, dateToUse: Date | null, duration: number): number {
+  if (endDate.getTime() > valEnd.getTime()) {
+    if (dateToUse && dateToUse.getTime() > valEnd.getTime()) {
+      return duration;
+    } else {
+      return Math.round((endDate.getTime() - valEnd.getTime()) / msPerDay);
+    }
+  }
+  return 0;
+}
+
+// Emulate R's unepremium
+function getUnePremium(unePeriod: number, duration: number, premium: number): number {
+  const val = duration !== 0 ? (unePeriod / duration) * premium : NaN;
+  return Number.isNaN(val) ? 0 : val;
+}
+
+// Emulate R's dac
+function getDac(unePeriod: number, duration: number, comm: number): number {
+  const val = duration !== 0 ? (unePeriod / duration) * comm : NaN;
+  return Number.isNaN(val) ? 0 : val;
+}
+
 async function processRow(row: Record<string, unknown>, context: ProcessingContext) {
   context.audit.totalRows += 1;
   const cols = context.columns!;
@@ -241,48 +335,18 @@ async function processRow(row: Record<string, unknown>, context: ProcessingConte
     return;
   }
 
-  if (endDate < startDate) {
-    context.audit.reviewRows += 1;
-    context.audit.reasons['End date before start date'] = (context.audit.reasons['End date before start date'] || 0) + 1;
-    return;
-  }
-
-  if (premium === 0) {
-    context.audit.reviewRows += 1;
-    context.audit.reasons['Zero premium'] = (context.audit.reasons['Zero premium'] || 0) + 1;
-    return;
-  }
-
-  const duration = Math.round((endDate.getTime() - startDate.getTime()) / msPerDay);
-  if (duration <= 0) {
-    context.audit.reviewRows += 1;
-    context.audit.reasons['Zero or negative duration'] = (context.audit.reasons['Zero or negative duration'] || 0) + 1;
-    return;
-  }
-
-  const vEndOffset = context.valEnd.getTime() + msPerDay;
-
-  let exposure = 0;
-  if (vEndOffset > startDate.getTime()) {
-    const activeEnd = Math.min(endDate.getTime(), vEndOffset);
-    exposure = Math.round((activeEnd - startDate.getTime()) / msPerDay);
-  }
-
-  const earnedFrac = Math.min(1, Math.max(0, exposure / duration));
-  const earnedPremium = premium * earnedFrac;
-  
-  const uprPeriod = Math.max(0, duration - exposure);
-  const unearnedPremium = premium - earnedPremium;
-
-  let dac = 0;
-  if (regDate.getTime() >= context.valStart.getTime() && regDate.getTime() < vEndOffset) {
-    dac = commission * (unearnedPremium / premium);
-  }
-
-  let gwp = 0;
-  if (regDate.getTime() >= context.valStart.getTime() && regDate.getTime() < vEndOffset) {
-    gwp = premium;
-  }
+  // Calculate according to R script exact definitions
+  const dateToUse = getDateToUse(startDate, endDate, context.valStart);
+  const duration = getUseDuration(startDate, endDate, regDate, context.valStart, dateToUse);
+  const gwpYtd = getGwpYtd(regDate, context.valEnd, premium);
+  const exposedDays = getExposedDays(dateToUse, context.valEnd, endDate, gwpYtd);
+  let earnedFrac = getEarnedFraction(exposedDays, duration, dateToUse, gwpYtd);
+  if (Number.isNaN(earnedFrac) || !isFinite(earnedFrac)) earnedFrac = 0;
+  let earnedPremium = getEarnedPrem(premium, earnedFrac);
+  if (Number.isNaN(earnedPremium) || !isFinite(earnedPremium)) earnedPremium = 0;
+  const unePeriod = getUnePeriod(context.valEnd, endDate, dateToUse, duration);
+  const unearnedPremium = getUnePremium(unePeriod, duration, premium);
+  const dac = getDac(unePeriod, duration, commission);
 
   if (!context.summaryMap.has(policyClass)) {
     context.summaryMap.set(policyClass, { earnedPremium: 0, unearnedPremium: 0, dac: 0, gwpYtd: 0, exposure: 0 });
@@ -291,8 +355,8 @@ async function processRow(row: Record<string, unknown>, context: ProcessingConte
   summary.earnedPremium += earnedPremium;
   summary.unearnedPremium += unearnedPremium;
   summary.dac += dac;
-  summary.gwpYtd += gwp;
-  summary.exposure += earnedFrac;
+  summary.gwpYtd += gwpYtd;
+  summary.exposure += exposedDays; // Based on R script: sum(EXPOSED_DAYS, na.rm = T)
 
   const detail: DetailRow = {
     policyKey,
@@ -304,13 +368,13 @@ async function processRow(row: Record<string, unknown>, context: ProcessingConte
     class: policyClass,
     regDate: isoDate(regDate),
     duration,
-    exposedDays: exposure,
+    exposedDays,
     earnedFrac,
     earnedPremium,
-    unePeriod: uprPeriod,
+    unePeriod,
     unearnedPremium,
     dac,
-    gwpYtd: gwp
+    gwpYtd
   };
 
   await context.calculationWriter.writeRow([
