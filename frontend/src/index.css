@@ -85,10 +85,17 @@ h1, h2, h3, h4, h5, h6 {
   animation: spin 1s linear infinite;
 }
 .container {
+  width: 100%;
+  min-width: 0;
   max-width: 1200px;
   margin: 0 auto;
   padding: 2rem;
   animation: fadeIn 0.6s ease-out;
+  transition: max-width 0.24s ease;
+}
+
+.app-layout:has(.sidebar-collapsed) > .main-content .container {
+  max-width: 1500px;
 }
 
 /* Glassmorphism Classes */
@@ -126,13 +133,111 @@ h1, h2, h3, h4, h5, h6 {
   top: 0;
   z-index: 100;
   flex-shrink: 0;
+  overflow-x: hidden;
+  transition: width 0.24s ease, padding 0.24s ease;
+}
+
+.sidebar.sidebar-collapsed {
+  width: 84px;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.sidebar-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  margin-bottom: 2.5rem;
+  padding: 0 0.25rem;
+  min-height: 32px;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.sidebar-brand-text {
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.sidebar-toggle {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+  color: var(--primary);
+  border-color: var(--primary-border);
+  background: var(--primary-glow);
+  outline: none;
+}
+
+.sidebar-collapsed .sidebar-brand-row {
+  padding: 0;
+  gap: 0.35rem;
+}
+
+.sidebar-collapsed .sidebar-brand-text,
+.sidebar-collapsed .nav-label {
+  display: none;
+}
+
+.sidebar-collapsed .nav-title {
+  height: 1px;
+  margin: 0.75rem 0 0.9rem;
+  padding: 0;
+  overflow: hidden;
+  color: transparent;
+  background: var(--border-color);
+}
+
+.sidebar-collapsed .nav-section {
+  margin-bottom: 1rem;
+}
+
+.sidebar-collapsed .nav-link {
+  justify-content: center;
+  gap: 0;
+  padding: 0.7rem;
+}
+
+.sidebar-collapsed .nav-link svg {
+  flex-shrink: 0;
 }
 
 .main-content {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+}
+
+.main-content > main {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .sidebar-logo {
@@ -189,6 +294,10 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid transparent;
   text-align: left;
   width: 100%;
+}
+
+.nav-label {
+  white-space: nowrap;
 }
 
 .nav-link:hover {

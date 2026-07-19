@@ -609,7 +609,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
 
           {/* Detail Tab */}
           {activeTab === 'detail' && (
-            <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
+            <div className="glass-panel" style={{ padding: '1.5rem', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
               {audit && audit.calculatedRows > audit.previewRows && (
                 <p style={{ margin: '0 0 1rem 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                   Showing the first {audit.previewRows.toLocaleString()} calculated rows to keep browser memory low. The Calculation CSV contains all {audit.calculatedRows.toLocaleString()} calculated rows.
@@ -634,12 +634,12 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
                     }}
                   />
                 </div>
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontFamily: 'monospace', whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {filteredDetail.length.toLocaleString()} / {detailRows.length.toLocaleString()} rows
                 </span>
               </div>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'end', padding: '0.85rem', marginBottom: '1rem', background: 'rgba(56, 189, 248, 0.04)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end', width: '100%', minWidth: 0, padding: '0.85rem', marginBottom: '1rem', background: 'rgba(56, 189, 248, 0.04)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
                 <div style={{ flex: '1 1 170px' }}>
                   <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>Date field</label>
                   <select value={dateFilterField} onChange={e => { setDateFilterField(e.target.value as DateFilterField); setCurrentPage(0); }} style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text)' }}>
@@ -660,7 +660,7 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
               </div>
 
               {/* Column filter inputs */}
-              <details style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+              <details style={{ width: '100%', minWidth: 0, marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                 <summary style={{ cursor: 'pointer', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   Column Filters
                 </summary>
@@ -687,8 +687,8 @@ export function EarnedPremium({ onBack }: EarnedPremiumProps) {
               </details>
 
               {/* Data table */}
-              <div style={{ overflowX: 'auto', maxHeight: '600px', overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <div style={{ width: '100%', maxWidth: '100%', minWidth: 0, overflowX: 'auto', maxHeight: '600px', overflowY: 'auto', overscrollBehaviorX: 'contain', WebkitOverflowScrolling: 'touch' }}>
+                <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr style={{ background: 'var(--bg-input)', borderBottom: '2px solid var(--border-color)' }}>
                       <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>#</th>
